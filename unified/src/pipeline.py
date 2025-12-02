@@ -30,7 +30,7 @@
 # COMMAND ----------
 
 # Lakeflow Declarative Pipeline Imports
-import databricks.sdk.runtime.pipelines as dp
+from pyspark import pipelines as dp
 from pyspark.sql import functions as F
 from pyspark.sql.types import (
     StructType,
@@ -223,15 +223,14 @@ def cdc_customer_view():
 # MAGIC ## Step 3: Target Streaming Table
 # MAGIC 
 # MAGIC Create the unified SCD2 streaming table that will receive data from all 3 CDC flows.
-# MAGIC 
-# MAGIC ```python
-# MAGIC dp.create_streaming_table(
-# MAGIC     name="unified_customer_scd2",
-# MAGIC     comment="Unified SCD Type 2 - complete customer history from Greenplum to real-time CDC"
-# MAGIC )
-# MAGIC ```
-# MAGIC 
-# MAGIC _TODO: Implement streaming table creation_
+
+# COMMAND ----------
+
+# Create the target streaming table for SCD Type 2
+dp.create_streaming_table(
+    name=TARGET_TABLE,
+    comment="Unified SCD Type 2 - complete customer history from Greenplum legacy to real-time Kafka CDC"
+)
 
 # COMMAND ----------
 
@@ -244,12 +243,45 @@ def cdc_customer_view():
 # MAGIC **Per Databricks docs:**
 # MAGIC > "Use append flow processing instead of UNION allows you to update the target table 
 # MAGIC > incrementally without running a full refresh."
-# MAGIC 
-# MAGIC **Configuration for all flows:**
-# MAGIC - `keys`: ["customer_id"]
-# MAGIC - `sequence_by`: event_timestamp
-# MAGIC - `stored_as_scd_type`: "2"
-# MAGIC - `apply_as_deletes`: is_deleted = true
-# MAGIC - `except_column_list`: ["source_system", "ingestion_timestamp", "_version"]
-# MAGIC 
-# MAGIC _TODO: Implement 3 CDC flows_
+
+# COMMAND ----------
+
+# CDC Flow 1: Greenplum Legacy History (oldest data)
+dp.create_auto_cdc_flow(
+    name="gp_to_unified_flow",
+    target=TARGET_TABLE,
+    source="gp_customer_v",
+    keys=["customer_id"],
+    sequence_by=F.col("event_timestamp"),
+    stored_as_scd_type="2",
+    apply_as_deletes=F.expr("is_deleted = true"),
+    except_column_list=["source_system", "ingestion_timestamp", "_version"]
+)
+
+# COMMAND ----------
+
+# CDC Flow 2: SQL Server Initial Snapshot (baseline state)
+dp.create_auto_cdc_flow(
+    name="sql_to_unified_flow",
+    target=TARGET_TABLE,
+    source="sql_customer_v",
+    keys=["customer_id"],
+    sequence_by=F.col("event_timestamp"),
+    stored_as_scd_type="2",
+    apply_as_deletes=F.expr("is_deleted = true"),
+    except_column_list=["source_system", "ingestion_timestamp", "_version"]
+)
+
+# COMMAND ----------
+
+# CDC Flow 3: Kafka CDC Stream (ongoing real-time changes)
+dp.create_auto_cdc_flow(
+    name="cdc_to_unified_flow",
+    target=TARGET_TABLE,
+    source="cdc_customer_v",
+    keys=["customer_id"],
+    sequence_by=F.col("event_timestamp"),
+    stored_as_scd_type="2",
+    apply_as_deletes=F.expr("is_deleted = true"),
+    except_column_list=["source_system", "ingestion_timestamp", "_version"]
+)
