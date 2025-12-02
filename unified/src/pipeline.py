@@ -118,8 +118,103 @@ SCD2_CONFIG = {
 # MAGIC - `gp_customer_v` - Greenplum history (exclude legacy SCD2 columns)
 # MAGIC - `sql_customer_v` - SQL Server initial (passthrough)
 # MAGIC - `cdc_customer_v` - Kafka CDC (add source_system literal)
-# MAGIC 
-# MAGIC _TODO: Implement @dp.view for each source_
+
+# COMMAND ----------
+
+# View 1: Greenplum Legacy History
+# Excludes: valid_from, valid_to, is_current (legacy SCD2 columns computed in Greenplum)
+@dp.view(
+    name="gp_customer_v",
+    comment="Greenplum legacy customer history - normalized (excludes legacy SCD2 columns)"
+)
+def gp_customer_view():
+    return (
+        spark.readStream
+        .table(GP_HISTORY_TABLE)
+        .select(
+            "customer_id",
+            "customer_name",
+            "date_of_birth",
+            "email",
+            "phone",
+            "state",
+            "zip_code",
+            "status",
+            "last_login",
+            "session_count",
+            "page_views",
+            "is_deleted",
+            "event_timestamp",
+            "ingestion_timestamp",
+            "source_system",
+            "_version"
+            # Excluded: valid_from, valid_to, is_current
+        )
+    )
+
+# COMMAND ----------
+
+# View 2: SQL Server Initial Snapshot
+# Passthrough - no transformation needed (schema already matches)
+@dp.view(
+    name="sql_customer_v",
+    comment="SQL Server initial customer snapshot - baseline state"
+)
+def sql_customer_view():
+    return (
+        spark.readStream
+        .table(SQL_INITIAL_TABLE)
+        .select(
+            "customer_id",
+            "customer_name",
+            "date_of_birth",
+            "email",
+            "phone",
+            "state",
+            "zip_code",
+            "status",
+            "last_login",
+            "session_count",
+            "page_views",
+            "is_deleted",
+            "event_timestamp",
+            "ingestion_timestamp",
+            "source_system",
+            "_version"
+        )
+    )
+
+# COMMAND ----------
+
+# View 3: Kafka CDC Stream
+# Adds source_system column (missing in source table)
+@dp.view(
+    name="cdc_customer_v",
+    comment="Kafka CDC customer stream - ongoing real-time changes"
+)
+def cdc_customer_view():
+    return (
+        spark.readStream
+        .table(CDC_STREAM_TABLE)
+        .select(
+            "customer_id",
+            "customer_name",
+            "date_of_birth",
+            "email",
+            "phone",
+            "state",
+            "zip_code",
+            "status",
+            "last_login",
+            "session_count",
+            "page_views",
+            "is_deleted",
+            "event_timestamp",
+            "ingestion_timestamp",
+            F.lit("kafka_cdc").alias("source_system"),  # Add missing column
+            "_version"
+        )
+    )
 
 # COMMAND ----------
 
