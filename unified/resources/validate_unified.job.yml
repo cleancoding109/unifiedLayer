@@ -1,0 +1,10 @@
+# Job to validate the unified SCD2 table
+resources:
+  jobs:
+    validate_unified_table:
+      name: "[${bundle.target}] Validate Unified SCD2 Table"
+      tasks:
+        - task_key: validate_data
+          notebook_task:
+            notebook_path: ../src/data_setup/06_validate_unified_table.py
+            source: WORKSPACE

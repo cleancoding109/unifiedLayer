@@ -86,32 +86,33 @@ Per Databricks documentation:
 - [x] Source tables verified in catalog
 
 ### Phase 2: Step 1 - Imports & Setup ✅ COMPLETE
-- [x] Import statements (`databricks.sdk.runtime.pipelines`)
+- [x] Import statements (`from pyspark import pipelines as dp`)
 - [x] Configuration constants
 - [x] Schema definitions
 
-### Phase 3: Step 2 - Source Views ⬜ NOT STARTED
-- [ ] `gp_customer_v` - Greenplum history (exclude `valid_from`, `valid_to`, `is_current`)
-- [ ] `sql_customer_v` - SQL Server initial (passthrough)
-- [ ] `cdc_customer_v` - Kafka CDC (add `source_system` literal)
+### Phase 3: Step 2 - Source Views ✅ COMPLETE
+- [x] `gp_customer_v` - Greenplum history (exclude `valid_from`, `valid_to`, `is_current`)
+- [x] `sql_customer_v` - SQL Server initial (passthrough)
+- [x] `cdc_customer_v` - Kafka CDC (add `source_system` literal)
 
-### Phase 4: Step 3 - Target Table ⬜ NOT STARTED
-- [ ] Create `unified_customer_scd2` streaming table
+### Phase 4: Step 3 - Target Table ✅ COMPLETE
+- [x] Create `unified_customer_scd2` streaming table
 
-### Phase 5: Step 4 - CDC Flows ⬜ NOT STARTED
-- [ ] CDC flow: `gp_customer_v` → `unified_customer_scd2`
-- [ ] CDC flow: `sql_customer_v` → `unified_customer_scd2`
-- [ ] CDC flow: `cdc_customer_v` → `unified_customer_scd2`
+### Phase 5: Step 4 - CDC Flows ✅ COMPLETE
+- [x] CDC flow: `gp_customer_v` → `unified_customer_scd2`
+- [x] CDC flow: `sql_customer_v` → `unified_customer_scd2`
+- [x] CDC flow: `cdc_customer_v` → `unified_customer_scd2`
 
-### Phase 6: Testing & Validation ⬜ NOT STARTED
-- [ ] Deploy pipeline to dev environment
-- [ ] Verify data flows correctly
-- [ ] Validate SCD2 behavior (versions, timestamps)
-- [ ] Test delete handling
+### Phase 6: Testing & Validation ⬜ IN PROGRESS
+- [ ] Verify data counts from each source
+- [ ] Validate SCD2 behavior (versions, __START_AT, __END_AT)
+- [ ] Test delete handling (is_deleted = true)
+- [ ] Verify timestamp sequencing across sources
 
 ### Phase 7: Documentation & Cleanup ⬜ NOT STARTED
-- [ ] Update README
-- [ ] Remove test data scripts (if needed)
+- [ ] Update README with usage instructions
+- [ ] Update design docs with final implementation
+- [ ] Clean up unused files
 - [ ] Final review
 
 ---
