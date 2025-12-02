@@ -102,9 +102,9 @@ dp.create_streaming_table(
 # COMMAND ----------
 
 dp.create_auto_cdc_flow(
-    name="gp_to_unified_flow",
+    name=GP_FLOW_NAME,
     target=TARGET_TABLE,
-    source="gp_customer_v",
+    source=GP_VIEW_NAME,
     keys=SCD2_KEYS,
     sequence_by=F.col(SEQUENCE_COLUMN),
     stored_as_scd_type="2",
@@ -121,9 +121,9 @@ dp.create_auto_cdc_flow(
 # COMMAND ----------
 
 dp.create_auto_cdc_flow(
-    name="sql_to_unified_flow",
+    name=SQL_FLOW_NAME,
     target=TARGET_TABLE,
-    source="sql_customer_v",
+    source=SQL_VIEW_NAME,
     keys=SCD2_KEYS,
     sequence_by=F.col(SEQUENCE_COLUMN),
     stored_as_scd_type="2",
@@ -140,9 +140,9 @@ dp.create_auto_cdc_flow(
 # COMMAND ----------
 
 dp.create_auto_cdc_flow(
-    name="cdc_to_unified_flow",
+    name=CDC_FLOW_NAME,
     target=TARGET_TABLE,
-    source="cdc_customer_v",
+    source=CDC_VIEW_NAME,
     keys=SCD2_KEYS,
     sequence_by=F.col(SEQUENCE_COLUMN),
     stored_as_scd_type="2",

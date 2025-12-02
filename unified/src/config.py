@@ -2,66 +2,53 @@
 # MAGIC %md
 # MAGIC # Configuration Module
 # MAGIC 
-# MAGIC Centralized configuration for the Unified SCD Type 2 Pipeline.
+# MAGIC Loads configuration from metadata and provides convenient accessors.
+# MAGIC This module bridges the metadata JSON with the pipeline code.
+
+# COMMAND ----------
+
+# MAGIC %run ./metadata_loader
 
 # COMMAND ----------
 
 # =============================================================================
-# SOURCE CONFIGURATION
+# SOURCE CONFIGURATION (loaded from metadata)
 # =============================================================================
 
-# Source catalog and schema (where Bronze tables are located)
-SOURCE_CATALOG = "ltc_insurance"
-SOURCE_SCHEMA = "raw_data_layer"
+# Source table fully-qualified names
+GP_HISTORY_TABLE = get_source_table_fqn("greenplum")
+SQL_INITIAL_TABLE = get_source_table_fqn("sqlserver")
+CDC_STREAM_TABLE = get_source_table_fqn("kafka_cdc")
 
-# Source table names (fully qualified)
-GP_HISTORY_TABLE = f"{SOURCE_CATALOG}.{SOURCE_SCHEMA}.rdl_customer_hist_st"
-SQL_INITIAL_TABLE = f"{SOURCE_CATALOG}.{SOURCE_SCHEMA}.rdl_customer_init_st"
-CDC_STREAM_TABLE = f"{SOURCE_CATALOG}.{SOURCE_SCHEMA}.rdl_customer"
+# Source view names
+GP_VIEW_NAME = get_source_config("greenplum")["view_name"]
+SQL_VIEW_NAME = get_source_config("sqlserver")["view_name"]
+CDC_VIEW_NAME = get_source_config("kafka_cdc")["view_name"]
 
-# =============================================================================
-# TARGET CONFIGURATION
-# =============================================================================
-
-# Target table name (catalog/schema set in pipeline YAML via bundle variables)
-TARGET_TABLE = "unified_customer_scd2"
-
-# =============================================================================
-# SCD TYPE 2 CONFIGURATION
-# =============================================================================
-
-# Primary key(s) for SCD2 tracking
-SCD2_KEYS = ["customer_id"]
-
-# Columns to exclude from change detection
-# (these columns changing won't trigger a new SCD2 version)
-SCD2_EXCEPT_COLUMNS = [
-    "source_system",        # Metadata - not business data
-    "ingestion_timestamp",  # Metadata - not business data
-    "_version",             # Internal versioning
-]
+# Source flow names
+GP_FLOW_NAME = get_source_config("greenplum")["flow_name"]
+SQL_FLOW_NAME = get_source_config("sqlserver")["flow_name"]
+CDC_FLOW_NAME = get_source_config("kafka_cdc")["flow_name"]
 
 # =============================================================================
-# COLUMN GROUPS
+# TARGET CONFIGURATION (loaded from metadata)
 # =============================================================================
 
-# Columns that represent business data (tracked for SCD2 changes)
-TRACKED_COLUMNS = [
-    "customer_name",
-    "date_of_birth",
-    "email",
-    "phone",
-    "state",
-    "zip_code",
-    "status",
-    "last_login",
-    "session_count",
-    "page_views",
-]
+TARGET_TABLE = get_target_table_name()
 
-# Columns for delete detection
-DELETE_COLUMN = "is_deleted"
-DELETE_CONDITION = "is_deleted = true"
+# =============================================================================
+# SCD TYPE 2 CONFIGURATION (loaded from metadata)
+# =============================================================================
 
-# Sequence column for ordering records
-SEQUENCE_COLUMN = "event_timestamp"
+SCD2_KEYS = get_scd2_keys()
+SEQUENCE_COLUMN = get_sequence_column()
+DELETE_CONDITION = get_delete_condition()
+SCD2_EXCEPT_COLUMNS = get_except_columns()
+
+# =============================================================================
+# VALIDATION
+# =============================================================================
+
+# Validate metadata on module load
+validate_metadata()
+

@@ -4,6 +4,8 @@
 # MAGIC 
 # MAGIC Defines the source views that normalize each input source to the unified schema.
 # MAGIC Each view reads from a Bronze streaming table and applies schema mapping.
+# MAGIC 
+# MAGIC View names and source tables are loaded from metadata.
 
 # COMMAND ----------
 
@@ -26,29 +28,18 @@ from pyspark import pipelines as dp
 # MAGIC %md
 # MAGIC ## View 1: Greenplum Legacy History
 # MAGIC 
-# MAGIC - **Source**: `rdl_customer_hist_st`
+# MAGIC - **Source**: Loaded from metadata
 # MAGIC - **Characteristics**: Oldest historical data, one-time load
-# MAGIC - **Schema Issues**:
-# MAGIC   - Abbreviated column names (cust_id, dob, etc.)
-# MAGIC   - Legacy SCD2 columns to exclude (valid_from, valid_to, is_current)
-# MAGIC   - Dates stored as strings
+# MAGIC - **Transformations**: Column renaming, date parsing, excludes legacy SCD2 columns
 
 # COMMAND ----------
 
 @dp.view(
-    name="gp_customer_v",
-    comment="Greenplum legacy customer history - schema mapped and normalized"
+    name=GP_VIEW_NAME,
+    comment=get_source_config("greenplum").get("description", "Greenplum source view")
 )
 def gp_customer_view():
-    """
-    Normalize Greenplum legacy data to unified schema.
-    
-    Transformations applied:
-    - cust_id -> customer_id
-    - dob -> date_of_birth (STRING to DATE)
-    - event_ts -> event_timestamp (STRING to TIMESTAMP)
-    - Excludes: valid_from, valid_to, is_current
-    """
+    """Normalize Greenplum legacy data to unified schema."""
     df = spark.readStream.table(GP_HISTORY_TABLE)
     return apply_schema_mapping(df, GP_COLUMN_MAPPING, "greenplum")
 
@@ -57,29 +48,18 @@ def gp_customer_view():
 # MAGIC %md
 # MAGIC ## View 2: SQL Server Initial Snapshot
 # MAGIC 
-# MAGIC - **Source**: `rdl_customer_init_st`
+# MAGIC - **Source**: Loaded from metadata
 # MAGIC - **Characteristics**: Baseline state, one-time load
-# MAGIC - **Schema Issues**:
-# MAGIC   - PascalCase column names (CustomerID, CustomerName, etc.)
-# MAGIC   - CustomerID is INT, needs cast to STRING
-# MAGIC   - .NET date formats
+# MAGIC - **Transformations**: PascalCase to snake_case, INT to STRING for IDs
 
 # COMMAND ----------
 
 @dp.view(
-    name="sql_customer_v",
-    comment="SQL Server initial customer snapshot - schema mapped and normalized"
+    name=SQL_VIEW_NAME,
+    comment=get_source_config("sqlserver").get("description", "SQL Server source view")
 )
 def sql_customer_view():
-    """
-    Normalize SQL Server initial snapshot to unified schema.
-    
-    Transformations applied:
-    - CustomerID -> customer_id (INT to STRING)
-    - CustomerName -> customer_name
-    - DateOfBirth -> date_of_birth
-    - ModifiedDate -> event_timestamp
-    """
+    """Normalize SQL Server initial snapshot to unified schema."""
     df = spark.readStream.table(SQL_INITIAL_TABLE)
     return apply_schema_mapping(df, SQL_COLUMN_MAPPING, "sqlserver")
 
@@ -88,25 +68,17 @@ def sql_customer_view():
 # MAGIC %md
 # MAGIC ## View 3: Kafka CDC Stream
 # MAGIC 
-# MAGIC - **Source**: `rdl_customer`
+# MAGIC - **Source**: Loaded from metadata
 # MAGIC - **Characteristics**: Ongoing real-time changes
-# MAGIC - **Schema Issues**:
-# MAGIC   - Missing source_system column (needs default value)
-# MAGIC   - Otherwise matches target schema (snake_case)
+# MAGIC - **Transformations**: Adds default source_system value
 
 # COMMAND ----------
 
 @dp.view(
-    name="cdc_customer_v",
-    comment="Kafka CDC customer stream - schema mapped with source_system default"
+    name=CDC_VIEW_NAME,
+    comment=get_source_config("kafka_cdc").get("description", "Kafka CDC source view")
 )
 def cdc_customer_view():
-    """
-    Normalize Kafka CDC stream to unified schema.
-    
-    Transformations applied:
-    - source_system -> defaults to "kafka_cdc" (column missing in source)
-    - All other columns: direct mapping (schema already matches)
-    """
+    """Normalize Kafka CDC stream to unified schema."""
     df = spark.readStream.table(CDC_STREAM_TABLE)
     return apply_schema_mapping(df, CDC_COLUMN_MAPPING, "kafka_cdc")
