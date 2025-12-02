@@ -1,11 +1,11 @@
-# The main job for unified.
+# The main job for unified SCD Type 2 pipeline
 resources:
   jobs:
     unified_job:
-      name: unified_job
+      name: unified_scd2_job
 
       trigger:
-        # Run this job every day, exactly one day from the last run; see https://docs.databricks.com/api/workspace/jobs/create#trigger
+        # Run this job every day, exactly one day from the last run
         periodic:
           interval: 1
           unit: DAYS
@@ -14,24 +14,20 @@ resources:
       #  on_failure:
       #    - your_email@example.com
 
-      tasks:
-        - task_key: notebook_task
-          notebook_task:
-            notebook_path: ../src/notebook.ipynb
+      parameters:
+        - name: catalog
+          default: ${var.catalog}
+        - name: schema
+          default: ${var.schema}
+        - name: source_catalog
+          default: ${var.source_catalog}
+        - name: source_schema
+          default: ${var.source_schema}
 
+      tasks:
         - task_key: refresh_pipeline
-          depends_on:
-            - task_key: notebook_task
           pipeline_task:
             pipeline_id: ${resources.pipelines.unified_pipeline.id}
-
-        - task_key: main_task
-          depends_on:
-            - task_key: refresh_pipeline
-          environment_key: default
-          python_wheel_task:
-            package_name: unified
-            entry_point: main
 
       # A list of task execution environment specifications that can be referenced by tasks of this job.
       environments:

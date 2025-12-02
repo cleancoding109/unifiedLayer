@@ -1,6 +1,2 @@
-from unified import main
-
-
-def test_find_all_taxis():
-    taxis = main.find_all_taxis()
-    assert taxis.count() > 5
+# Tests for Unified SCD Type 2 Pipeline
+# TODO: Implement tests

@@ -1,0 +1,18 @@
+# Standalone job for creating customer tables
+resources:
+  jobs:
+    create_customer_tables_job:
+      name: create_customer_tables
+
+      tasks:
+        - task_key: create_tables
+          notebook_task:
+            notebook_path: ../src/data_setup/04_create_customer_tables.py
+            source: WORKSPACE
+
+        - task_key: load_data
+          depends_on:
+            - task_key: create_tables
+          notebook_task:
+            notebook_path: ../src/data_setup/05_load_customer_data.py
+            source: WORKSPACE

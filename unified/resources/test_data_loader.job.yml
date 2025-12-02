@@ -1,0 +1,45 @@
+# Test Data Loader Job for Unified SCD2 Pipeline
+resources:
+  jobs:
+    test_data_loader_job:
+      name: unified_test_data_loader
+
+      parameters:
+        - name: catalog
+          default: ${var.source_catalog}
+        - name: schema
+          default: ${var.source_schema}
+
+      tasks:
+        - task_key: create_source_tables
+          notebook_task:
+            notebook_path: ../src/data_setup/01_create_source_tables.py
+            source: WORKSPACE
+
+        - task_key: load_sample_data
+          depends_on:
+            - task_key: create_source_tables
+          notebook_task:
+            notebook_path: ../src/data_setup/02_load_sample_data.py
+            source: WORKSPACE
+
+        - task_key: verify_data
+          depends_on:
+            - task_key: load_sample_data
+          notebook_task:
+            notebook_path: ../src/data_setup/03_verify_data.py
+            source: WORKSPACE
+
+        - task_key: create_customer_tables
+          depends_on:
+            - task_key: verify_data
+          notebook_task:
+            notebook_path: ../src/data_setup/04_create_customer_tables.py
+            source: WORKSPACE
+
+        - task_key: load_customer_data
+          depends_on:
+            - task_key: create_customer_tables
+          notebook_task:
+            notebook_path: ../src/data_setup/05_load_customer_data.py
+            source: WORKSPACE

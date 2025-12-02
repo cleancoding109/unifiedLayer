@@ -1,0 +1,108 @@
+{
+  "pipeline": {
+    "name": "unified_scd2_pipeline",
+    "version": "1.0.0",
+    "description": "Unified SCD Type 2 Pipeline for LTC Insurance - merges customers, policies, and claims"
+  },
+  "target": {
+    "table_name": "unified_scd2_target",
+    "catalog": "${pipeline.catalog}",
+    "schema": "${pipeline.schema}",
+    "scd_type": 2,
+    "keys": ["entity_type", "entity_id"],
+    "sequence_by": "event_timestamp",
+    "except_columns": ["source_system"]
+  },
+  "sources": {
+    "customers": {
+      "name": "rdl_customers",
+      "catalog": "${pipeline.source_catalog}",
+      "schema": "${pipeline.source_schema}",
+      "type": "managed_table",
+      "source_system": "greenplum",
+      "entity_type": "customer",
+      "description": "Customer data from Greenplum with CDF enabled",
+      "column_mapping": {
+        "entity_id": "customer_id",
+        "event_timestamp": "event_timestamp",
+        "is_deleted": "is_deleted"
+      },
+      "data_columns": ["customer_name", "date_of_birth", "email", "phone", "state", "zip_code", "status", "last_login", "session_count", "page_views"]
+    },
+    "policies": {
+      "name": "rdl_policies",
+      "catalog": "${pipeline.source_catalog}",
+      "schema": "${pipeline.source_schema}",
+      "type": "managed_table",
+      "source_system": "sqlserver",
+      "entity_type": "policy",
+      "description": "Policy data from SQL Server with CDF enabled",
+      "column_mapping": {
+        "entity_id": "policy_id",
+        "event_timestamp": "event_timestamp",
+        "is_deleted": "is_deleted"
+      },
+      "data_columns": ["customer_id", "policy_status", "coverage_type", "premium_amount", "effective_timestamp", "expiration_timestamp"]
+    },
+    "claims": {
+      "name": "rdl_claims",
+      "catalog": "${pipeline.source_catalog}",
+      "schema": "${pipeline.source_schema}",
+      "type": "managed_table",
+      "source_system": "kafka",
+      "entity_type": "claim",
+      "description": "Claims data from Kafka CDC with CDF enabled",
+      "column_mapping": {
+        "entity_id": "claim_id",
+        "event_timestamp": "event_timestamp",
+        "is_deleted": "is_deleted"
+      },
+      "data_columns": ["policy_id", "claim_amount", "diagnosis_code", "provider_id", "service_date", "filing_date"]
+    }
+  },
+  "unified_schema": {
+    "columns": [
+      {
+        "name": "entity_type",
+        "type": "STRING",
+        "nullable": false,
+        "description": "Type of entity: customer, policy, claim"
+      },
+      {
+        "name": "entity_id",
+        "type": "STRING",
+        "nullable": false,
+        "description": "Primary key for the entity"
+      },
+      {
+        "name": "data",
+        "type": "MAP<STRING, STRING>",
+        "nullable": true,
+        "description": "Entity payload data as key-value pairs"
+      },
+      {
+        "name": "is_deleted",
+        "type": "BOOLEAN",
+        "nullable": true,
+        "description": "Soft delete flag"
+      },
+      {
+        "name": "event_timestamp",
+        "type": "TIMESTAMP",
+        "nullable": false,
+        "description": "Timestamp for sequencing (from source)"
+      },
+      {
+        "name": "source_system",
+        "type": "STRING",
+        "nullable": true,
+        "description": "Origin system identifier"
+      }
+    ]
+  },
+  "scd2_config": {
+    "apply_as_deletes": "is_deleted = true",
+    "track_history_column_list": null,
+    "track_history_except_column_list": ["source_system"]
+  }
+}
