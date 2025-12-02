@@ -11,8 +11,10 @@ Merge **3 source paths for the same Customer entity** into a **single SCD Type 2
 that provides a complete, sequenced history from legacy (Greenplum) to real-time (Kafka CDC).
 
 ### 1.3 Framework
-- **Lakeflow Python API:** `import databricks.sdk.runtime.pipelines as dp`
+- **Lakeflow Python API:** `from pyspark import pipelines as dp`
 - **Target Table:** `unified_customer_scd2` (Lakeflow Streaming Table)
+- **Architecture:** Metadata-driven, modular design
+- **Configuration:** JSON metadata file as single source of truth
 
 ### 1.4 High-Level Architecture
 
@@ -122,60 +124,80 @@ All 3 tables have **aligned schemas** - minimal transformation needed.
 ### 4.1 Step 1: Imports & Setup
 
 ```python
-import databricks.sdk.runtime.pipelines as dp
+from pyspark import pipelines as dp
 from pyspark.sql import functions as F
-from pyspark.sql.types import (
-    StructType, StructField, StringType, DateType, 
-    TimestampType, IntegerType, BooleanType, LongType
-)
 ```
 
-### 4.2 Step 2: Source Views
+### 4.2 Metadata Loading
 
-Create 3 views that normalize each source to a common schema:
+All configuration is loaded from `pipeline_metadata.json`:
 
 ```python
-@dp.view(name="gp_customer_v", comment="Greenplum legacy history - normalized")
+# metadata_loader.py
+METADATA = load_metadata()  # Loads JSON file
+
+# Accessor functions
+get_source_config("greenplum")  # Returns source configuration
+get_column_mapping("sqlserver")  # Returns column mappings
+get_target_table_name()          # Returns "unified_customer_scd2"
+get_scd2_keys()                  # Returns ["customer_id"]
+```
+
+### 4.3 Schema Mapping
+
+Each source has different column names. The `apply_schema_mapping()` function handles:
+- **Column renaming**: `cust_id` → `customer_id`
+- **Type conversion**: STRING dates → DATE type
+- **Default values**: Missing `source_system` → "kafka_cdc"
+
+```python
+# transformations.py
+def apply_schema_mapping(df, column_mapping, source_name):
+    select_exprs = []
+    for target_col, mapping in column_mapping.items():
+        source_col = mapping.get("source_col")
+        transform = mapping.get("transform")
+        default_val = mapping.get("default")
+        
+        col_expr = _build_column_expression(source_col, transform, default_val)
+        select_exprs.append(col_expr.alias(target_col))
+    
+    return df.select(*select_exprs)
+```
+
+### 4.4 Source Views
+
+Views use schema mapping to normalize each source:
+
+```python
+# views.py
+@dp.view(name=GP_VIEW_NAME, comment=get_source_config("greenplum")["description"])
 def gp_customer_view():
-    return spark.readStream.table("ltc_insurance.raw_data_layer.rdl_customer_hist_st").select(
-        "customer_id", "customer_name", "date_of_birth", "email", "phone",
-        "state", "zip_code", "status", "last_login", "session_count", 
-        "page_views", "is_deleted", "event_timestamp", 
-        "ingestion_timestamp", "source_system", "_version"
-        # Excludes: valid_from, valid_to, is_current
-    )
+    df = spark.readStream.table(GP_HISTORY_TABLE)
+    return apply_schema_mapping(df, GP_COLUMN_MAPPING, "greenplum")
 
-@dp.view(name="sql_customer_v", comment="SQL Server initial snapshot - normalized")
+@dp.view(name=SQL_VIEW_NAME, comment=get_source_config("sqlserver")["description"])
 def sql_customer_view():
-    return spark.readStream.table("ltc_insurance.raw_data_layer.rdl_customer_init_st").select(
-        "customer_id", "customer_name", "date_of_birth", "email", "phone",
-        "state", "zip_code", "status", "last_login", "session_count", 
-        "page_views", "is_deleted", "event_timestamp", 
-        "ingestion_timestamp", "source_system", "_version"
-    )
+    df = spark.readStream.table(SQL_INITIAL_TABLE)
+    return apply_schema_mapping(df, SQL_COLUMN_MAPPING, "sqlserver")
 
-@dp.view(name="cdc_customer_v", comment="Kafka CDC stream - normalized")
+@dp.view(name=CDC_VIEW_NAME, comment=get_source_config("kafka_cdc")["description"])
 def cdc_customer_view():
-    return spark.readStream.table("ltc_insurance.raw_data_layer.rdl_customer").select(
-        "customer_id", "customer_name", "date_of_birth", "email", "phone",
-        "state", "zip_code", "status", "last_login", "session_count", 
-        "page_views", "is_deleted", "event_timestamp", 
-        "ingestion_timestamp", 
-        F.lit("kafka_cdc").alias("source_system"),  # Add missing column
-        "_version"
-    )
+    df = spark.readStream.table(CDC_STREAM_TABLE)
+    return apply_schema_mapping(df, CDC_COLUMN_MAPPING, "kafka_cdc")
 ```
 
-### 4.3 Step 3: Target Streaming Table
+### 4.5 Target Streaming Table
 
 ```python
+# pipeline.py
 dp.create_streaming_table(
-    name="unified_customer_scd2",
-    comment="Unified SCD Type 2 table - complete customer history from Greenplum to real-time CDC"
+    name=TARGET_TABLE,  # From config: "unified_customer_scd2"
+    comment="Unified SCD Type 2 - complete customer history"
 )
 ```
 
-### 4.4 Step 4: Multiple CDC Flows
+### 4.6 Multiple CDC Flows
 
 **Design Decision:** Per Databricks documentation, we use **3 separate `create_auto_cdc_flow()` calls**
 targeting the same streaming table instead of `unionByName()`.
@@ -186,35 +208,19 @@ targeting the same streaming table instead of `unionByName()`.
 - Handles out-of-order data via `sequence_by`
 
 ```python
-# Common CDC configuration
-CDC_CONFIG = {
-    "keys": ["customer_id"],
-    "sequence_by": F.col("event_timestamp"),
-    "stored_as_scd_type": "2",
-    "apply_as_deletes": F.expr("is_deleted = true"),
-    "except_column_list": ["source_system", "ingestion_timestamp", "_version"]
-}
-
-# Flow 1: Greenplum History (oldest data)
+# pipeline.py - All config loaded from metadata
 dp.create_auto_cdc_flow(
-    target="unified_customer_scd2",
-    source="gp_customer_v",
-    **CDC_CONFIG
+    name=GP_FLOW_NAME,           # From config
+    target=TARGET_TABLE,
+    source=GP_VIEW_NAME,         # From config
+    keys=SCD2_KEYS,              # From config: ["customer_id"]
+    sequence_by=F.col(SEQUENCE_COLUMN),
+    stored_as_scd_type="2",
+    apply_as_deletes=F.expr(DELETE_CONDITION),
+    except_column_list=SCD2_EXCEPT_COLUMNS
 )
 
-# Flow 2: SQL Server Initial (baseline snapshot)
-dp.create_auto_cdc_flow(
-    target="unified_customer_scd2",
-    source="sql_customer_v",
-    **CDC_CONFIG
-)
-
-# Flow 3: Kafka CDC (ongoing real-time changes)
-dp.create_auto_cdc_flow(
-    target="unified_customer_scd2",
-    source="cdc_customer_v",
-    **CDC_CONFIG
-)
+# Same pattern for SQL and CDC flows...
 ```
 
 ---
@@ -277,22 +283,38 @@ If not, a pre-processing step may be needed to ensure correct ordering.
 ```
 unified/
 ├── docs/
-│   ├── design_document.md      # This file
-│   └── implementation_plan.md  # Step-by-step plan
+│   ├── design_document.md          # This file
+│   └── implementation_plan.md      # Step-by-step plan
 ├── src/
-│   ├── pipeline.py             # Main Lakeflow pipeline
 │   ├── metadata/
-│   │   ├── schemas.py          # Schema definitions
-│   │   └── config.py           # Configuration
-│   └── data_setup/             # Test data scripts
+│   │   └── pipeline_metadata.json  # Single source of truth (JSON)
+│   ├── metadata_loader.py          # Loads & validates metadata
+│   ├── config.py                   # Configuration from metadata
+│   ├── schema.py                   # Target schema & column mappings
+│   ├── transformations.py          # Type conversion functions
+│   ├── views.py                    # Source view definitions
+│   ├── pipeline.py                 # Main orchestration
+│   └── data_setup/                 # Test data scripts
 ├── resources/
-│   ├── unified.pipeline.yml    # Pipeline resource definition
-│   └── unified.job.yml         # Job resource definition
+│   ├── unified.pipeline.yml        # Pipeline resource definition
+│   └── unified.job.yml             # Job resource definition
 ├── tests/
 │   └── main_test.py
-├── databricks.yml              # Bundle configuration
+├── databricks.yml                   # Bundle configuration
 └── README.md
 ```
+
+### Module Responsibilities
+
+| Module | Purpose |
+|--------|--------|
+| `pipeline_metadata.json` | Single source of truth for all configuration |
+| `metadata_loader.py` | Load JSON, validate, provide accessor functions |
+| `config.py` | Source tables, target table, SCD2 settings |
+| `schema.py` | Target schema, per-source column mappings |
+| `transformations.py` | `apply_schema_mapping()`, date/boolean parsing |
+| `views.py` | 3 source views with schema normalization |
+| `pipeline.py` | Target table + 3 CDC flows |
 
 ---
 
@@ -306,9 +328,50 @@ unified/
 | 4 | CDC Flows (3 flows) | ✅ Complete |
 | 5 | Testing & Validation | ✅ Complete |
 | 6 | Documentation | ✅ Complete |
+| 7 | Modular Refactoring | ✅ Complete |
+| 8 | Metadata-Driven Config | ✅ Complete |
 
 ### Pipeline Successfully Deployed
 
 - **Pipeline ID:** `5c80b313-fc1f-47e9-8c1b-4f2c34ed1268`
 - **Target Table:** `ltc_insurance.unified_dev.unified_customer_scd2`
 - **All 3 CDC flows:** COMPLETED
+
+---
+
+## 9. Metadata Configuration
+
+All configuration is stored in `src/metadata/pipeline_metadata.json`:
+
+```json
+{
+  "pipeline": {
+    "name": "unified_scd2_pipeline",
+    "version": "2.0.0",
+    "catalog": "ltc_insurance"
+  },
+  "target": {
+    "table_name": "unified_customer_scd2",
+    "keys": ["customer_id"],
+    "sequence_by": "event_timestamp",
+    "delete_condition": "is_deleted = true",
+    "except_columns": ["source_system", "ingestion_timestamp", "_version"]
+  },
+  "sources": {
+    "greenplum": { "table_name": "rdl_customer_hist_st", "column_mapping": {...} },
+    "sqlserver": { "table_name": "rdl_customer_init_st", "column_mapping": {...} },
+    "kafka_cdc": { "table_name": "rdl_customer", "column_mapping": {...} }
+  },
+  "target_schema": { "columns": {...} }
+}
+```
+
+### Benefits of Metadata-Driven Approach
+
+| Benefit | Description |
+|---------|-------------|
+| Single source of truth | All config in one JSON file |
+| Easy modification | Change mappings without code changes |
+| Self-documenting | Configuration visible and readable |
+| Validation | Catches missing fields on load |
+| Extensibility | Add new sources by adding to JSON |

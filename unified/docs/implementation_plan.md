@@ -5,6 +5,12 @@
 Building a **Unification Pipeline (Stream 3)** using Databricks Lakeflow SDP to merge 3 source paths 
 for the **same Customer entity** into a single SCD Type 2 streaming table.
 
+**Key Features:**
+- Metadata-driven configuration (single source of truth)
+- Modular architecture with separation of concerns
+- Schema mapping with column renaming and type conversion
+- Multi-flow CDC targeting same SCD2 table
+
 ---
 
 ## MVP Scope
@@ -115,75 +121,130 @@ Per Databricks documentation:
 - [x] Clean up unused placeholder files
 - [x] Final review
 
+### Phase 8: Modular Refactoring ✅ COMPLETE
+- [x] Created `config.py` - Configuration loaded from metadata
+- [x] Created `schema.py` - Target schema and column mappings
+- [x] Created `transformations.py` - Schema mapping transformation logic
+- [x] Created `views.py` - Source view definitions
+- [x] Refactored `pipeline.py` - Main orchestration only
+
+### Phase 9: Metadata-Driven Configuration ✅ COMPLETE
+- [x] Created `metadata_loader.py` - Loads and validates JSON metadata
+- [x] Updated `pipeline_metadata.json` with full schema mappings
+- [x] All modules now load configuration from metadata
+- [x] Validation on load to catch missing required fields
+
+---
+
+## Module Architecture
+
+```
+src/
+├── metadata/
+│   └── pipeline_metadata.json   # Single source of truth
+├── metadata_loader.py           # Loads & validates metadata
+├── config.py                    # Configuration from metadata
+├── schema.py                    # Schema definitions from metadata
+├── transformations.py           # Type conversion logic
+├── views.py                     # Source view definitions
+└── pipeline.py                  # Main orchestration
+```
+
+### Module Dependencies
+
+```
+pipeline_metadata.json
+         │
+         ▼
+  metadata_loader.py
+         │
+    ┌────┴────┐
+    ▼         ▼
+config.py  schema.py
+    │         │
+    └────┬────┘
+         ▼
+     views.py ──► transformations.py
+         │
+         ▼
+    pipeline.py
+```
+
 ---
 
 ## Source Table Details
 
 ### rdl_customer_hist_st (Greenplum)
 
-| Column | Type | Action |
-|--------|------|--------|
-| customer_id | STRING | Keep (PK) |
-| customer_name | STRING | Keep |
-| date_of_birth | DATE | Keep |
-| email | STRING | Keep |
-| phone | STRING | Keep |
-| state | STRING | Keep |
-| zip_code | STRING | Keep |
-| status | STRING | Keep |
-| last_login | TIMESTAMP | Keep |
-| session_count | INT | Keep |
-| page_views | INT | Keep |
-| is_deleted | BOOLEAN | Keep (delete detection) |
-| event_timestamp | TIMESTAMP | Keep (sequence_by) |
-| valid_from | TIMESTAMP | **EXCLUDE** (legacy SCD2) |
-| valid_to | TIMESTAMP | **EXCLUDE** (legacy SCD2) |
-| is_current | BOOLEAN | **EXCLUDE** (legacy SCD2) |
-| ingestion_timestamp | TIMESTAMP | Keep (exclude from tracking) |
-| source_system | STRING | Keep (exclude from tracking) |
-| _version | BIGINT | Keep (exclude from tracking) |
+**Real-world schema differences:** Uses abbreviated column names.
+
+| Source Column | Target Column | Transform |
+|---------------|---------------|----------|
+| cust_id | customer_id | - |
+| cust_name | customer_name | - |
+| dob | date_of_birth | to_date |
+| email_addr | email | - |
+| phone_num | phone | - |
+| state_cd | state | - |
+| zip | zip_code | - |
+| cust_status | status | - |
+| last_login_ts | last_login | to_timestamp |
+| sess_cnt | session_count | cast_int |
+| pg_views | page_views | cast_int |
+| is_deleted | is_deleted | cast_boolean |
+| event_ts | event_timestamp | to_timestamp |
+| ingest_ts | ingestion_timestamp | to_timestamp |
+| src_sys | source_system | - |
+| version_num | _version | cast_long |
+| valid_from | - | **EXCLUDE** |
+| valid_to | - | **EXCLUDE** |
+| is_current | - | **EXCLUDE** |
 
 ### rdl_customer_init_st (SQL Server)
 
-| Column | Type | Action |
-|--------|------|--------|
-| customer_id | STRING | Keep (PK) |
-| customer_name | STRING | Keep |
-| date_of_birth | DATE | Keep |
-| email | STRING | Keep |
-| phone | STRING | Keep |
-| state | STRING | Keep |
-| zip_code | STRING | Keep |
-| status | STRING | Keep |
-| last_login | TIMESTAMP | Keep |
-| session_count | INT | Keep |
-| page_views | INT | Keep |
-| is_deleted | BOOLEAN | Keep (delete detection) |
-| event_timestamp | TIMESTAMP | Keep (sequence_by) |
-| ingestion_timestamp | TIMESTAMP | Keep (exclude from tracking) |
-| source_system | STRING | Keep (exclude from tracking) |
-| _version | BIGINT | Keep (exclude from tracking) |
+**Real-world schema differences:** Uses PascalCase column names.
+
+| Source Column | Target Column | Transform |
+|---------------|---------------|----------|
+| CustomerID | customer_id | cast_string |
+| CustomerName | customer_name | - |
+| DateOfBirth | date_of_birth | to_date |
+| EmailAddress | email | - |
+| PhoneNumber | phone | - |
+| StateCode | state | - |
+| ZipCode | zip_code | - |
+| Status | status | - |
+| LastLoginDate | last_login | to_timestamp |
+| SessionCount | session_count | cast_int |
+| PageViews | page_views | cast_int |
+| IsDeleted | is_deleted | cast_boolean |
+| ModifiedDate | event_timestamp | to_timestamp |
+| IngestionTime | ingestion_timestamp | to_timestamp |
+| SourceSystem | source_system | - |
+| RowVersion | _version | cast_long |
 
 ### rdl_customer (Kafka CDC)
 
-| Column | Type | Action |
-|--------|------|--------|
-| customer_id | STRING | Keep (PK) |
-| customer_name | STRING | Keep |
-| date_of_birth | DATE | Keep |
-| email | STRING | Keep |
-| phone | STRING | Keep |
-| state | STRING | Keep |
-| zip_code | STRING | Keep |
-| status | STRING | Keep |
-| last_login | TIMESTAMP | Keep |
-| session_count | INT | Keep |
-| page_views | INT | Keep |
-| is_deleted | BOOLEAN | Keep (delete detection) |
-| event_timestamp | TIMESTAMP | Keep (sequence_by) |
-| ingestion_timestamp | TIMESTAMP | Keep (exclude from tracking) |
-| source_system | STRING | **ADD** as `F.lit("kafka_cdc")` |
-| _version | BIGINT | Keep (exclude from tracking) |
+**Real-world schema differences:** Uses snake_case, missing source_system.
+
+| Source Column | Target Column | Transform |
+|---------------|---------------|----------|
+| customer_id | customer_id | - |
+| customer_name | customer_name | - |
+| date_of_birth | date_of_birth | - |
+| email | email | - |
+| phone | phone | - |
+| state | state | - |
+| zip_code | zip_code | - |
+| status | status | - |
+| last_login | last_login | - |
+| session_count | session_count | - |
+| page_views | page_views | - |
+| is_deleted | is_deleted | - |
+| event_timestamp | event_timestamp | - |
+| ingestion_timestamp | ingestion_timestamp | - |
+| *(missing)* | source_system | **DEFAULT: "kafka_cdc"** |
+| _version | _version | - |
 
 ---
 
@@ -214,6 +275,8 @@ All 3 flows use the same configuration:
 | 5 | Step 4: CDC Flows | ✅ Complete | Done |
 | 6 | Testing & Validation | ✅ Complete | Done |
 | 7 | Documentation | ✅ Complete | Done |
+| 8 | Modular Refactoring | ✅ Complete | Done |
+| 9 | Metadata-Driven Config | ✅ Complete | Done |
 
 ---
 
