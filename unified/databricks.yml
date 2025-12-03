@@ -14,10 +14,6 @@ variables:
     description: Catalog containing source streaming tables
   source_schema:
     description: Schema containing source streaming tables
-  kafka_topic:
-    description: Kafka topic for CDC events
-  kafka_bootstrap_servers:
-    description: Kafka bootstrap servers
 
 artifacts:
   python_artifact:
@@ -49,8 +45,6 @@ targets:
       schema: unified_dev
       source_catalog: ltc_insurance
       source_schema: raw_data_layer
-      kafka_topic: cdc_events
-      kafka_bootstrap_servers: localhost:9092
 
   prod:
     mode: production
@@ -66,5 +60,3 @@ targets:
       schema: unified_prod
       source_catalog: ltc_insurance
       source_schema: raw_data_layer
-      kafka_topic: cdc_events
-      kafka_bootstrap_servers: kafka-prod.example.com:9092
