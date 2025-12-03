@@ -13,7 +13,44 @@
     "sequence_by": "event_timestamp",
     "delete_condition": "is_deleted = true",
     "except_columns": [],
-    "track_history_except_columns": ["source_system", "ingestion_timestamp", "source_record_start_dt", "source_record_end_dt"]
+    "track_history_except_columns": ["source_system", "ingestion_timestamp", "source_record_start_dt", "source_record_end_dt"],
+    "schema": {
+      "case_id":                {"dtype": "STRING",    "nullable": false, "description": "Unique workflow case identifier"},
+      "workflow_type":          {"dtype": "STRING",    "nullable": true,  "description": "Type of workflow (NewBusiness, Renewal, etc.)"},
+      "step_name":              {"dtype": "STRING",    "nullable": true,  "description": "Current workflow step name"},
+      "step_status":            {"dtype": "STRING",    "nullable": true,  "description": "Step status (Pending, InProgress, Completed, etc.)"},
+      "assigned_to":            {"dtype": "STRING",    "nullable": true,  "description": "User/team assigned to the case"},
+      "applicant_id":           {"dtype": "STRING",    "nullable": true,  "description": "Applicant/customer identifier"},
+      "policy_number":          {"dtype": "STRING",    "nullable": true,  "description": "Associated policy number"},
+      "decision":               {"dtype": "STRING",    "nullable": true,  "description": "Underwriting decision (Approved, Declined, Refer, etc.)"},
+      "decision_reason":        {"dtype": "STRING",    "nullable": true,  "description": "Reason for decision"},
+      "risk_score":             {"dtype": "INT",       "nullable": true,  "description": "Calculated risk score"},
+      "premium_amount":         {"dtype": "DECIMAL(10,2)", "nullable": true, "description": "Calculated premium amount"},
+      "is_deleted":             {"dtype": "BOOLEAN",   "nullable": false, "description": "Soft delete flag"},
+      "event_timestamp":        {"dtype": "TIMESTAMP", "nullable": false, "description": "Event/change timestamp for SCD2 sequencing"},
+      "ingestion_timestamp":    {"dtype": "TIMESTAMP", "nullable": true,  "description": "When record was ingested into Bronze"},
+      "source_system":          {"dtype": "STRING",    "nullable": false, "description": "Origin system (pega_stream or pega_bix)"},
+      "source_record_start_dt": {"dtype": "TIMESTAMP", "nullable": true,  "description": "Original SCD start date from BIX"},
+      "source_record_end_dt":   {"dtype": "TIMESTAMP", "nullable": true,  "description": "Original SCD end date from BIX"}
+    },
+    "transforms": {
+      "to_date": {
+        "description": "Parse string to DATE type",
+        "formats": ["yyyy-MM-dd", "MM/dd/yyyy", "dd-MMM-yyyy", "yyyyMMdd"]
+      },
+      "to_timestamp": {
+        "description": "Parse string to TIMESTAMP type",
+        "formats": ["yyyy-MM-dd HH:mm:ss", "yyyy-MM-dd'T'HH:mm:ss", "yyyy-MM-dd'T'HH:mm:ss.SSS", "yyyy-MM-dd'T'HH:mm:ss.SSSZ", "MM/dd/yyyy HH:mm:ss"]
+      },
+      "cast_string": {"description": "Cast to STRING type"},
+      "cast_int": {"description": "Cast to INT type"},
+      "cast_decimal": {"description": "Cast to DECIMAL type"},
+      "cast_boolean": {
+        "description": "Normalize various boolean representations",
+        "true_values": ["TRUE", "1", "Y", "YES"],
+        "false_values": ["FALSE", "0", "N", "NO"]
+      }
+    }
   },
 
   "sources": {
@@ -73,47 +110,6 @@
         "source_record_start_dt": {"source_col": "valid_from",          "transform": null},
         "source_record_end_dt":   {"source_col": "valid_to",            "transform": null}
       }
-    }
-  },
-
-  "target_schema": {
-    "columns": {
-      "case_id":                {"dtype": "STRING",    "nullable": false, "description": "Unique workflow case identifier"},
-      "workflow_type":          {"dtype": "STRING",    "nullable": true,  "description": "Type of workflow (NewBusiness, Renewal, etc.)"},
-      "step_name":              {"dtype": "STRING",    "nullable": true,  "description": "Current workflow step name"},
-      "step_status":            {"dtype": "STRING",    "nullable": true,  "description": "Step status (Pending, InProgress, Completed, etc.)"},
-      "assigned_to":            {"dtype": "STRING",    "nullable": true,  "description": "User/team assigned to the case"},
-      "applicant_id":           {"dtype": "STRING",    "nullable": true,  "description": "Applicant/customer identifier"},
-      "policy_number":          {"dtype": "STRING",    "nullable": true,  "description": "Associated policy number"},
-      "decision":               {"dtype": "STRING",    "nullable": true,  "description": "Underwriting decision (Approved, Declined, Refer, etc.)"},
-      "decision_reason":        {"dtype": "STRING",    "nullable": true,  "description": "Reason for decision"},
-      "risk_score":             {"dtype": "INT",       "nullable": true,  "description": "Calculated risk score"},
-      "premium_amount":         {"dtype": "DECIMAL(10,2)", "nullable": true, "description": "Calculated premium amount"},
-      "is_deleted":             {"dtype": "BOOLEAN",   "nullable": false, "description": "Soft delete flag"},
-      "event_timestamp":        {"dtype": "TIMESTAMP", "nullable": false, "description": "Event/change timestamp for SCD2 sequencing"},
-      "ingestion_timestamp":    {"dtype": "TIMESTAMP", "nullable": true,  "description": "When record was ingested into Bronze"},
-      "source_system":          {"dtype": "STRING",    "nullable": false, "description": "Origin system (pega_stream or pega_bix)"},
-      "source_record_start_dt": {"dtype": "TIMESTAMP", "nullable": true,  "description": "Original SCD start date from BIX"},
-      "source_record_end_dt":   {"dtype": "TIMESTAMP", "nullable": true,  "description": "Original SCD end date from BIX"}
-    }
-  },
-
-  "transforms": {
-    "to_date": {
-      "description": "Parse string to DATE type",
-      "formats": ["yyyy-MM-dd", "MM/dd/yyyy", "dd-MMM-yyyy", "yyyyMMdd"]
-    },
-    "to_timestamp": {
-      "description": "Parse string to TIMESTAMP type",
-      "formats": ["yyyy-MM-dd HH:mm:ss", "yyyy-MM-dd'T'HH:mm:ss", "yyyy-MM-dd'T'HH:mm:ss.SSS", "yyyy-MM-dd'T'HH:mm:ss.SSSZ", "MM/dd/yyyy HH:mm:ss"]
-    },
-    "cast_string": {"description": "Cast to STRING type"},
-    "cast_int": {"description": "Cast to INT type"},
-    "cast_decimal": {"description": "Cast to DECIMAL type"},
-    "cast_boolean": {
-      "description": "Normalize various boolean representations",
-      "true_values": ["TRUE", "1", "Y", "YES"],
-      "false_values": ["FALSE", "0", "N", "NO"]
     }
   }
 }

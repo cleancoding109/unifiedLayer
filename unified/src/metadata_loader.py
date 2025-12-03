@@ -233,7 +233,12 @@ def get_enabled_sources() -> dict:
 
 def get_target_schema() -> dict:
     """Get the unified target schema definition."""
-    return METADATA.get("target_schema", {}).get("columns", {})
+    return get_target_config().get("schema", {})
+
+
+def get_transforms() -> dict:
+    """Get the transform definitions for data type conversions."""
+    return get_target_config().get("transforms", {})
 
 
 def get_column_mapping(source_name: str) -> dict:
