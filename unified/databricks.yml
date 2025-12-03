@@ -8,22 +8,16 @@ bundle:
 variables:
   catalog:
     description: Unity Catalog name for the pipeline
-    default: ltc_insurance
   schema:
     description: Schema name for the pipeline target
-    default: unified
   source_catalog:
     description: Catalog containing source streaming tables
-    default: ltc_insurance
   source_schema:
     description: Schema containing source streaming tables
-    default: raw_data_layer
   kafka_topic:
     description: Kafka topic for CDC events
-    default: cdc_events
   kafka_bootstrap_servers:
     description: Kafka bootstrap servers
-    default: localhost:9092
 
 artifacts:
   python_artifact:
@@ -31,8 +25,8 @@ artifacts:
     build: uv build --wheel
 
 include:
-  - resources/*.yml
-  - resources/*/*.yml
+  - "resources/test/*.yml"
+  - "resources/stream/unified/customer/*.yml"
 
 targets:
   dev:
@@ -49,6 +43,8 @@ targets:
       schema: unified_dev
       source_catalog: ltc_insurance
       source_schema: raw_data_layer
+      kafka_topic: cdc_events
+      kafka_bootstrap_servers: localhost:9092
 
   prod:
     mode: production
@@ -64,3 +60,5 @@ targets:
       schema: unified_prod
       source_catalog: ltc_insurance
       source_schema: raw_data_layer
+      kafka_topic: cdc_events
+      kafka_bootstrap_servers: kafka-prod.example.com:9092
