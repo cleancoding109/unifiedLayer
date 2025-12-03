@@ -1,7 +1,9 @@
 # Databricks notebook source
 # Load Sample Pega Underwriting Workflow Events
 
-from pyspark.sql.functions import lit, current_timestamp, to_timestamp
+from pyspark.sql.functions import lit, current_timestamp, to_timestamp, col
+from pyspark.sql.types import StructType, StructField, StringType, IntegerType, DecimalType, BooleanType
+from decimal import Decimal
 from datetime import datetime, timedelta
 
 catalog = "ltc_insurance"
@@ -20,11 +22,28 @@ print("Cleared existing data")
 # Sample underwriting workflow events for Pega Event Stream
 # Simulates real-time workflow events coming from Kafka
 
+# Define schema to match the table exactly
+stream_schema = StructType([
+    StructField("case_id", StringType(), False),
+    StructField("workflow_type", StringType(), True),
+    StructField("step_name", StringType(), True),
+    StructField("step_status", StringType(), True),
+    StructField("assigned_to", StringType(), True),
+    StructField("applicant_id", StringType(), True),
+    StructField("policy_number", StringType(), True),
+    StructField("decision", StringType(), True),
+    StructField("decision_reason", StringType(), True),
+    StructField("risk_score", IntegerType(), True),
+    StructField("premium_amount", DecimalType(10, 2), True),
+    StructField("is_deleted", BooleanType(), False),
+    StructField("event_ts_str", StringType(), False)
+])
+
 pega_stream_data = [
     # Case 001: New Business Application - complete workflow progression
     ("CASE-001", "NewBusiness", "InitialReview", "Completed", "TeamA", "APPL-101", None, None, None, None, None, False, "2024-01-15 09:00:00"),
     ("CASE-001", "NewBusiness", "MedicalReview", "Completed", "MedicalTeam", "APPL-101", None, None, None, 72, None, False, "2024-01-16 14:30:00"),
-    ("CASE-001", "NewBusiness", "FinalDecision", "Completed", "SeniorUW", "APPL-101", "POL-2024-001", "Approved", "Standard Risk", 72, 1250.00, False, "2024-01-18 11:00:00"),
+    ("CASE-001", "NewBusiness", "FinalDecision", "Completed", "SeniorUW", "APPL-101", "POL-2024-001", "Approved", "Standard Risk", 72, Decimal("1250.00"), False, "2024-01-18 11:00:00"),
     
     # Case 002: Referred for additional review
     ("CASE-002", "NewBusiness", "InitialReview", "Completed", "TeamB", "APPL-102", None, None, None, None, None, False, "2024-01-17 10:15:00"),
@@ -35,17 +54,13 @@ pega_stream_data = [
     ("CASE-003", "NewBusiness", "FinalDecision", "Completed", "SeniorUW", "APPL-103", None, "Declined", "High Risk - Pre-existing Condition", 95, None, False, "2024-01-19 15:00:00"),
     
     # Case 004: Renewal workflow
-    ("CASE-004", "Renewal", "RenewalReview", "InProgress", "RenewalTeam", "APPL-104", "POL-2023-050", None, None, 45, 980.00, False, "2024-01-20 09:00:00"),
+    ("CASE-004", "Renewal", "RenewalReview", "InProgress", "RenewalTeam", "APPL-104", "POL-2023-050", None, None, 45, Decimal("980.00"), False, "2024-01-20 09:00:00"),
     
     # Case 005: Cancelled/Deleted case
     ("CASE-005", "NewBusiness", "InitialReview", "Cancelled", "TeamB", "APPL-105", None, None, "Applicant Withdrew", None, None, True, "2024-01-20 11:30:00"),
 ]
 
-stream_df = spark.createDataFrame(pega_stream_data, [
-    "case_id", "workflow_type", "step_name", "step_status", "assigned_to", 
-    "applicant_id", "policy_number", "decision", "decision_reason", 
-    "risk_score", "premium_amount", "is_deleted", "event_ts_str"
-])
+stream_df = spark.createDataFrame(pega_stream_data, stream_schema)
 
 stream_df = (stream_df
     .withColumn("event_timestamp", to_timestamp("event_ts_str", "yyyy-MM-dd HH:mm:ss"))
@@ -61,13 +76,33 @@ print(f"Loaded {stream_df.count()} records into rdl_pega_uw_events_st")
 # Sample BIX History data - historical workflow records with SCD dates
 # This simulates the historical extract from Pega BIX with valid_from/valid_to
 
+# Define schema to match the table exactly
+bix_schema = StructType([
+    StructField("case_id", StringType(), False),
+    StructField("workflow_type", StringType(), True),
+    StructField("step_name", StringType(), True),
+    StructField("step_status", StringType(), True),
+    StructField("assigned_to", StringType(), True),
+    StructField("applicant_id", StringType(), True),
+    StructField("policy_number", StringType(), True),
+    StructField("decision", StringType(), True),
+    StructField("decision_reason", StringType(), True),
+    StructField("risk_score", IntegerType(), True),
+    StructField("premium_amount", DecimalType(10, 2), True),
+    StructField("is_deleted", BooleanType(), False),
+    StructField("event_ts_str", StringType(), False),
+    StructField("valid_from_str", StringType(), True),
+    StructField("valid_to_str", StringType(), True),
+    StructField("is_current", BooleanType(), False)
+])
+
 pega_bix_data = [
     # Case 006: Historical case with full SCD history from BIX
     ("CASE-006", "NewBusiness", "InitialReview", "Completed", "TeamC", "APPL-106", None, None, None, None, None, False, 
      "2023-12-01 10:00:00", "2023-12-01 10:00:00", "2023-12-02 14:00:00", False),
     ("CASE-006", "NewBusiness", "MedicalReview", "Completed", "MedicalTeam", "APPL-106", None, None, None, 55, None, False, 
      "2023-12-02 14:00:00", "2023-12-02 14:00:00", "2023-12-05 09:30:00", False),
-    ("CASE-006", "NewBusiness", "FinalDecision", "Completed", "SeniorUW", "APPL-106", "POL-2023-120", "Approved", "Preferred Risk", 55, 875.00, False, 
+    ("CASE-006", "NewBusiness", "FinalDecision", "Completed", "SeniorUW", "APPL-106", "POL-2023-120", "Approved", "Preferred Risk", 55, Decimal("875.00"), False, 
      "2023-12-05 09:30:00", "2023-12-05 09:30:00", None, True),
     
     # Case 007: Historical case that was declined
@@ -77,9 +112,9 @@ pega_bix_data = [
      "2023-11-16 10:00:00", "2023-11-16 10:00:00", None, True),
     
     # Case 008: Historical renewal with rate increase
-    ("CASE-008", "Renewal", "RenewalReview", "Completed", "RenewalTeam", "APPL-108", "POL-2022-080", None, None, 60, 1100.00, False, 
+    ("CASE-008", "Renewal", "RenewalReview", "Completed", "RenewalTeam", "APPL-108", "POL-2022-080", None, None, 60, Decimal("1100.00"), False, 
      "2023-10-01 09:00:00", "2023-10-01 09:00:00", "2023-10-05 16:00:00", False),
-    ("CASE-008", "Renewal", "FinalDecision", "Completed", "SeniorUW", "APPL-108", "POL-2022-080", "Approved", "Rate Increase - Age Factor", 60, 1320.00, False, 
+    ("CASE-008", "Renewal", "FinalDecision", "Completed", "SeniorUW", "APPL-108", "POL-2022-080", "Approved", "Rate Increase - Age Factor", 60, Decimal("1320.00"), False, 
      "2023-10-05 16:00:00", "2023-10-05 16:00:00", None, True),
     
     # Case 009: Current case also in BIX (overlap scenario)
@@ -87,12 +122,7 @@ pega_bix_data = [
      "2024-01-15 09:00:00", "2024-01-15 09:00:00", "2024-01-16 14:30:00", False),
 ]
 
-bix_df = spark.createDataFrame(pega_bix_data, [
-    "case_id", "workflow_type", "step_name", "step_status", "assigned_to", 
-    "applicant_id", "policy_number", "decision", "decision_reason", 
-    "risk_score", "premium_amount", "is_deleted", "event_ts_str",
-    "valid_from_str", "valid_to_str", "is_current"
-])
+bix_df = spark.createDataFrame(pega_bix_data, bix_schema)
 
 bix_df = (bix_df
     .withColumn("event_timestamp", to_timestamp("event_ts_str", "yyyy-MM-dd HH:mm:ss"))
