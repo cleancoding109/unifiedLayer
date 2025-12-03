@@ -85,18 +85,35 @@ dp.create_streaming_table(
 
 # COMMAND ----------
 
-# Iterate through all configured sources and create CDC flows
-for source_key, source_config in metadata_loader.get_all_sources().items():
+# Iterate through only ENABLED sources and create CDC flows
+# This allows sequential merging of sources one at a time:
+# 1. First enable greenplum -> deploy & run -> merge historical data
+# 2. Then enable sqlserver -> deploy & run -> merge initial snapshot
+# 3. Finally enable kafka_cdc -> deploy & run -> start real-time streaming
+for source_key, source_config in metadata_loader.get_enabled_sources().items():
     
-    dp.create_auto_cdc_flow(
-        name=source_config["flow_name"],
-        target=metadata_loader.get_target_table_name(),
-        source=source_config["view_name"],
-        keys=metadata_loader.get_scd2_keys(),
-        sequence_by=F.col(metadata_loader.get_sequence_column()),
-        stored_as_scd_type="2",
-        apply_as_deletes=F.expr(metadata_loader.get_delete_condition()),
-        except_column_list=metadata_loader.get_except_columns()
-    )
+    # Build kwargs for create_auto_cdc_flow
+    cdc_flow_kwargs = {
+        "name": source_config["flow_name"],
+        "target": metadata_loader.get_target_table_name(),
+        "source": source_config["view_name"],
+        "keys": metadata_loader.get_scd2_keys(),
+        "sequence_by": F.col(metadata_loader.get_sequence_column()),
+        "stored_as_scd_type": "2",
+        "apply_as_deletes": F.expr(metadata_loader.get_delete_condition()),
+    }
+    
+    # Add except_column_list only if there are columns to exclude
+    except_cols = metadata_loader.get_except_columns()
+    if except_cols:
+        cdc_flow_kwargs["except_column_list"] = except_cols
+    
+    # Add track_history_except_column_list for columns that shouldn't trigger new history records
+    # These columns are stored but changes don't create new SCD2 versions
+    track_history_except = metadata_loader.get_track_history_except_columns()
+    if track_history_except:
+        cdc_flow_kwargs["track_history_except_column_list"] = track_history_except
+    
+    dp.create_auto_cdc_flow(**cdc_flow_kwargs)
 
 

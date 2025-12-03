@@ -215,6 +215,26 @@ def get_all_sources() -> dict:
     return METADATA.get("sources", {})
 
 
+def get_enabled_sources() -> dict:
+    """
+    Get only enabled sources for processing.
+    
+    Sources can be enabled/disabled in the metadata JSON using the 'enabled' flag.
+    This allows sequential merging of sources one at a time.
+    
+    Returns:
+        dict: Only sources where enabled=True (or enabled not specified, defaults to True)
+    """
+    all_sources = get_all_sources()
+    enabled = {
+        key: config 
+        for key, config in all_sources.items() 
+        if config.get("enabled", True)
+    }
+    print(f"Enabled sources: {list(enabled.keys())} (out of {list(all_sources.keys())})")
+    return enabled
+
+
 def get_target_schema() -> dict:
     """Get the unified target schema definition."""
     return METADATA.get("target_schema", {}).get("columns", {})
@@ -266,6 +286,16 @@ def get_delete_condition() -> str:
 def get_except_columns() -> list:
     """Get columns excluded from SCD2 change tracking."""
     return get_target_config().get("except_columns", [])
+
+
+def get_track_history_except_columns() -> list:
+    """
+    Get columns excluded from SCD2 history tracking.
+    
+    These columns are included in the target table but changes to them
+    do NOT create new history records (updated in place like SCD Type 1).
+    """
+    return get_target_config().get("track_history_except_columns", [])
 
 
 def get_target_table_name() -> str:

@@ -46,8 +46,9 @@ def _create_source_view(source_key: str, source_config: dict):
 
 # COMMAND ----------
 
-# Iterate through all configured sources and create views
-for key, source_data in metadata_loader.get_all_sources().items():
+# Iterate through only ENABLED sources and create views
+# This allows sequential merging of sources one at a time
+for key, source_data in metadata_loader.get_enabled_sources().items():
     _create_source_view(key, source_data)
 
 
