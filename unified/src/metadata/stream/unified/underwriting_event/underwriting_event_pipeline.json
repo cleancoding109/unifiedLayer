@@ -1,6 +1,6 @@
 {
   "pipeline": {
-    "name": "unified_underwriting_event_pipeline",
+    "name": "unified_underwriting_scd2_pipeline",
     "version": "1.0.0",
     "description": "Unified SCD Type 2 Pipeline - merges Pega underwriting workflow events from stream and BIX history"
   },

@@ -79,10 +79,11 @@ def _get_metadata_path() -> str:
     spark_config = get_spark_config()
     domain = spark_config.get("domain", "customer_cdc")
     
-    # New nested path relative to metadata folder
-    nested_path = os.path.join("stream", "unified", domain, "pipeline_metadata.json")
+    # New nested path relative to metadata folder - file named as {domain}_pipeline.json
+    metadata_file = f"{domain}_pipeline.json"
+    nested_path = os.path.join("stream", "unified", domain, metadata_file)
     
-    print(f"Looking for metadata in domain: {domain}")
+    print(f"Looking for metadata in domain: {domain}, file: {metadata_file}")
     
     # Strategy 1: Try importlib.resources (Python 3.9+)
     try:
@@ -90,7 +91,7 @@ def _get_metadata_path() -> str:
         # For Python 3.9+, use files()
         try:
             from importlib.resources import files
-            pkg_path = files(f'src.metadata.stream.unified.{domain}').joinpath('pipeline_metadata.json')
+            pkg_path = files(f'src.metadata.stream.unified.{domain}').joinpath(metadata_file)
             if hasattr(pkg_path, '_path'):
                 return str(pkg_path._path)
             # For traversable objects

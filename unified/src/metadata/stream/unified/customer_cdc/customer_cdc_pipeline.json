@@ -1,6 +1,6 @@
 {
   "pipeline": {
-    "name": "unified_scd2_pipeline",
+    "name": "unified_customer_cdc_scd2_pipeline",
     "version": "2.0.0",
     "description": "Unified SCD Type 2 Pipeline - merges 3 customer source paths into single unified table"
   },
