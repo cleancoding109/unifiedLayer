@@ -12,7 +12,7 @@
     "keys": ["customer_id"],
     "sequence_by": "event_timestamp",
     "delete_condition": "is_deleted = true",
-    "except_columns": ["source_system", "ingestion_timestamp", "_version"]
+    "except_columns": []
   },
 
   "sources": {
