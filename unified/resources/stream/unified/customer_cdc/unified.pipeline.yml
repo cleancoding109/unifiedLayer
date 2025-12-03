@@ -17,6 +17,7 @@ resources:
         pipeline.schema: ${var.schema}
         pipeline.source_catalog: ${var.source_catalog}
         pipeline.source_schema: ${var.source_schema}
-        pipeline.domain: customer_cdc
+        # Relative path to metadata JSON from src/metadata folder
+        pipeline.metadata_path: stream/unified/customer_cdc/customer_cdc_pipeline.json
         pipeline.kafka_topic: ${var.kafka_topic}
         pipeline.kafka_bootstrap_servers: ${var.kafka_bootstrap_servers}

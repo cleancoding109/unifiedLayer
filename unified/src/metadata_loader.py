@@ -19,7 +19,7 @@ def _get_spark_config() -> dict:
     via the 'configuration' section and injected as Spark config at runtime.
     
     Returns:
-        dict: Configuration with catalog, schema, source_catalog, source_schema, domain
+        dict: Configuration with catalog, schema, source_catalog, source_schema, metadata_path
     """
     # Default values for local testing (when Spark is not available)
     defaults = {
@@ -27,7 +27,7 @@ def _get_spark_config() -> dict:
         "schema": "unified_dev",
         "source_catalog": "ltc_insurance",
         "source_schema": "raw_data_layer",
-        "domain": "customer_cdc",  # Default domain for backward compatibility
+        "metadata_path": "stream/unified/customer_cdc/customer_cdc_pipeline.json",  # Default for backward compatibility
     }
     
     try:
@@ -39,7 +39,7 @@ def _get_spark_config() -> dict:
             "schema": spark.conf.get("pipeline.schema", defaults["schema"]),
             "source_catalog": spark.conf.get("pipeline.source_catalog", defaults["source_catalog"]),
             "source_schema": spark.conf.get("pipeline.source_schema", defaults["source_schema"]),
-            "domain": spark.conf.get("pipeline.domain", defaults["domain"]),
+            "metadata_path": spark.conf.get("pipeline.metadata_path", defaults["metadata_path"]),
         }
     except Exception:
         # Return defaults if Spark is not available (e.g., during local testing)
@@ -67,73 +67,59 @@ def _get_metadata_path() -> str:
     """
     Get the absolute path to the metadata JSON file.
     
-    Tries multiple strategies to locate the file:
-    1. importlib.resources (for installed packages)
-    2. Relative to __file__ (for direct execution)
-    3. Workspace path fallback (for DLT notebooks)
+    The metadata path is passed via pipeline.metadata_path Spark config.
+    This is a relative path from src/metadata folder.
     
-    Metadata path structure: metadata/stream/unified/{domain}/pipeline_metadata.json
-    Domain is read from pipeline.domain Spark config (e.g., customer_cdc, underwriting_event)
+    Tries multiple strategies to resolve the absolute path:
+    1. Relative to __file__ (for direct execution)
+    2. Workspace path using bundle.sourcePath (for DLT notebooks)
+    3. Hardcoded fallback paths
     """
-    # Get domain from Spark config
+    # Get metadata_path from Spark config (relative path from metadata folder)
     spark_config = get_spark_config()
-    domain = spark_config.get("domain", "customer_cdc")
+    metadata_path = spark_config.get("metadata_path", "stream/unified/customer_cdc/customer_cdc_pipeline.json")
     
-    # New nested path relative to metadata folder - file named as {domain}_pipeline.json
-    metadata_file = f"{domain}_pipeline.json"
-    nested_path = os.path.join("stream", "unified", domain, metadata_file)
+    print(f"Looking for metadata at relative path: {metadata_path}")
     
-    print(f"Looking for metadata in domain: {domain}, file: {metadata_file}")
-    
-    # Strategy 1: Try importlib.resources (Python 3.9+)
-    try:
-        import importlib.resources as pkg_resources
-        # For Python 3.9+, use files()
-        try:
-            from importlib.resources import files
-            pkg_path = files(f'src.metadata.stream.unified.{domain}').joinpath(metadata_file)
-            if hasattr(pkg_path, '_path'):
-                return str(pkg_path._path)
-            # For traversable objects
-            return str(pkg_path)
-        except (ImportError, TypeError, ModuleNotFoundError):
-            pass
-    except ImportError:
-        pass
-    
-    # Strategy 2: Try relative to __file__
+    # Strategy 1: Try relative to __file__ (for direct execution / tests)
     try:
         current_dir = os.path.dirname(os.path.abspath(__file__))
-        candidate = os.path.join(current_dir, "metadata", nested_path)
+        candidate = os.path.join(current_dir, "metadata", metadata_path)
         if os.path.exists(candidate):
+            print(f"Found metadata at: {candidate}")
             return candidate
     except NameError:
         pass
     
-    # Strategy 3: Try workspace path (for DLT notebooks)
+    # Strategy 2: Try workspace path (for DLT notebooks)
     # The bundle deploys files to this location
     try:
         from pyspark.sql import SparkSession
         spark = SparkSession.builder.getOrCreate()
         bundle_path = spark.conf.get("bundle.sourcePath", "")
         if bundle_path:
-            candidate = os.path.join(bundle_path, "metadata", nested_path)
+            candidate = os.path.join(bundle_path, "metadata", metadata_path)
             if os.path.exists(candidate):
+                print(f"Found metadata at: {candidate}")
                 return candidate
     except Exception:
         pass
     
-    # Strategy 4: Hardcoded fallback for the bundle deployment path
+    # Strategy 3: Hardcoded fallback for the bundle deployment path (Shared folder)
     fallback_paths = [
-        f"/Workspace/Users/cleancoding109@gmail.com/.bundle/unified/dev/files/src/metadata/{nested_path}",
-        f"/Workspace/Repos/unifiedLayer/unified/src/metadata/{nested_path}",
+        f"/Workspace/Shared/.bundle/unified/dev/files/src/metadata/{metadata_path}",
+        f"/Workspace/Shared/.bundle/unified/prod/files/src/metadata/{metadata_path}",
     ]
     for path in fallback_paths:
         if os.path.exists(path):
+            print(f"Found metadata at fallback: {path}")
             return path
     
     # If all strategies fail, return the relative path and let load_metadata handle the error
-    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "metadata", nested_path)
+    try:
+        return os.path.join(os.path.dirname(os.path.abspath(__file__)), "metadata", metadata_path)
+    except NameError:
+        return metadata_path
 
 
 def load_metadata() -> dict:

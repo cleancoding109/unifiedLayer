@@ -39,6 +39,11 @@ targets:
     default: true
     workspace:
       host: https://dbc-b2d72a44-d1b1.cloud.databricks.com
+      # Deploy to Shared folder for team access
+      root_path: /Workspace/Shared/.bundle/${bundle.name}/${bundle.target}
+    # Prevent pipeline/job names from being prefixed with [dev username]
+    presets:
+      name_prefix: ""
     variables:
       catalog: ltc_insurance
       schema: unified_dev
@@ -51,8 +56,8 @@ targets:
     mode: production
     workspace:
       host: https://dbc-b2d72a44-d1b1.cloud.databricks.com
-      # We explicitly deploy to /Workspace/Users/cleancoding109@gmail.com to make sure we only have a single copy.
-      root_path: /Workspace/Users/cleancoding109@gmail.com/.bundle/${bundle.name}/${bundle.target}
+      # Deploy to Shared folder for team access
+      root_path: /Workspace/Shared/.bundle/${bundle.name}/${bundle.target}
     permissions:
       - user_name: cleancoding109@gmail.com
         level: CAN_MANAGE
