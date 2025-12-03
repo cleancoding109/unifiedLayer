@@ -26,7 +26,8 @@ artifacts:
 
 include:
   - "resources/test/*.yml"
-  - "resources/stream/unified/customer/*.yml"
+  - "resources/stream/unified/customer_cdc/*.yml"
+  - "resources/stream/unified/underwriting_event/*.yml"
 
 targets:
   dev:

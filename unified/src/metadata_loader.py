@@ -19,7 +19,7 @@ def _get_spark_config() -> dict:
     via the 'configuration' section and injected as Spark config at runtime.
     
     Returns:
-        dict: Configuration with catalog, schema, source_catalog, source_schema
+        dict: Configuration with catalog, schema, source_catalog, source_schema, domain
     """
     # Default values for local testing (when Spark is not available)
     defaults = {
@@ -27,6 +27,7 @@ def _get_spark_config() -> dict:
         "schema": "unified_dev",
         "source_catalog": "ltc_insurance",
         "source_schema": "raw_data_layer",
+        "domain": "customer_cdc",  # Default domain for backward compatibility
     }
     
     try:
@@ -38,6 +39,7 @@ def _get_spark_config() -> dict:
             "schema": spark.conf.get("pipeline.schema", defaults["schema"]),
             "source_catalog": spark.conf.get("pipeline.source_catalog", defaults["source_catalog"]),
             "source_schema": spark.conf.get("pipeline.source_schema", defaults["source_schema"]),
+            "domain": spark.conf.get("pipeline.domain", defaults["domain"]),
         }
     except Exception:
         # Return defaults if Spark is not available (e.g., during local testing)
@@ -70,10 +72,17 @@ def _get_metadata_path() -> str:
     2. Relative to __file__ (for direct execution)
     3. Workspace path fallback (for DLT notebooks)
     
-    Metadata path structure: metadata/stream/unified/customer/pipeline_metadata.json
+    Metadata path structure: metadata/stream/unified/{domain}/pipeline_metadata.json
+    Domain is read from pipeline.domain Spark config (e.g., customer_cdc, underwriting_event)
     """
+    # Get domain from Spark config
+    spark_config = get_spark_config()
+    domain = spark_config.get("domain", "customer_cdc")
+    
     # New nested path relative to metadata folder
-    nested_path = os.path.join("stream", "unified", "customer", "pipeline_metadata.json")
+    nested_path = os.path.join("stream", "unified", domain, "pipeline_metadata.json")
+    
+    print(f"Looking for metadata in domain: {domain}")
     
     # Strategy 1: Try importlib.resources (Python 3.9+)
     try:
@@ -81,7 +90,7 @@ def _get_metadata_path() -> str:
         # For Python 3.9+, use files()
         try:
             from importlib.resources import files
-            pkg_path = files('src.metadata.stream.unified.customer').joinpath('pipeline_metadata.json')
+            pkg_path = files(f'src.metadata.stream.unified.{domain}').joinpath('pipeline_metadata.json')
             if hasattr(pkg_path, '_path'):
                 return str(pkg_path._path)
             # For traversable objects

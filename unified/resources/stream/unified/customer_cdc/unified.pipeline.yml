@@ -1,8 +1,8 @@
-# The main pipeline for unified SCD Type 2
+# The main pipeline for unified customer CDC SCD Type 2
 resources:
   pipelines:
-    unified_pipeline:
-      name: unified_scd2_pipeline
+    customer_cdc_pipeline:
+      name: unified_customer_cdc_scd2_pipeline
       catalog: ${var.catalog}
       schema: ${var.schema}
       serverless: true
@@ -17,5 +17,6 @@ resources:
         pipeline.schema: ${var.schema}
         pipeline.source_catalog: ${var.source_catalog}
         pipeline.source_schema: ${var.source_schema}
+        pipeline.domain: customer_cdc
         pipeline.kafka_topic: ${var.kafka_topic}
         pipeline.kafka_bootstrap_servers: ${var.kafka_bootstrap_servers}

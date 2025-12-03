@@ -1,18 +1,14 @@
-# The main job for unified SCD Type 2 pipeline
+# The main job for unified customer CDC SCD Type 2 pipeline
 resources:
   jobs:
-    unified_job:
-      name: unified_scd2_job
+    customer_cdc_job:
+      name: unified_customer_cdc_scd2_job
 
       trigger:
         # Run this job every day, exactly one day from the last run
         periodic:
           interval: 1
           unit: DAYS
-
-      #email_notifications:
-      #  on_failure:
-      #    - your_email@example.com
 
       parameters:
         - name: catalog
@@ -27,14 +23,10 @@ resources:
       tasks:
         - task_key: refresh_pipeline
           pipeline_task:
-            pipeline_id: ${resources.pipelines.unified_pipeline.id}
+            pipeline_id: ${resources.pipelines.customer_cdc_pipeline.id}
 
-      # A list of task execution environment specifications that can be referenced by tasks of this job.
       environments:
         - environment_key: default
-
-          # Full documentation of this spec can be found at:
-          # https://docs.databricks.com/api/workspace/jobs/create#environments-spec
           spec:
             environment_version: "2"
             dependencies:
