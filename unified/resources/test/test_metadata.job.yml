@@ -1,0 +1,9 @@
+resources:
+  jobs:
+    test_metadata_structure_job:
+      name: "test_metadata_structure_job"
+      description: "Job to run test metadata structure pipeline"
+      tasks:
+        - task_key: run_test_pipeline
+          pipeline_task:
+            pipeline_id: ${resources.pipelines.test_metadata_structure_pipeline.id}

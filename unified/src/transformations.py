@@ -8,7 +8,7 @@ except ImportError:
 
 # COMMAND ----------
 
-def apply_schema_mapping(df: DataFrame, column_mapping: dict, source_name: str) -> DataFrame:
+def apply_schema_mapping(df: DataFrame, column_mapping: dict, source_name: str, target_index: int = 0) -> DataFrame:
     """
     Apply column mapping and type conversions to normalize a source DataFrame.
     
@@ -20,6 +20,7 @@ def apply_schema_mapping(df: DataFrame, column_mapping: dict, source_name: str) 
         column_mapping: Dictionary mapping target columns to source columns + transforms
                        Format: {"target_col": {"source_col": "src", "transform": "type", "default": val}}
         source_name: Name of source for logging/debugging
+        target_index: Target index for multi-target pipelines (default 0)
     
     Returns:
         DataFrame with unified schema:
@@ -34,7 +35,7 @@ def apply_schema_mapping(df: DataFrame, column_mapping: dict, source_name: str) 
     """
     select_exprs = []
     
-    target_schema = metadata_loader.get_target_schema()
+    target_schema = metadata_loader.get_target_schema(target_index)
     
     for target_col, mapping in column_mapping.items():
         source_col = mapping.get("source_col")

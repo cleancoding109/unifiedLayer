@@ -105,7 +105,8 @@ def _get_metadata_path() -> str:
     except Exception:
         pass
     
-    # Strategy 3: Hardcoded fallback for the bundle deployment path (Shared folder)
+    # Strategy 3: Fallback paths for bundle deployment
+    # Note: In dev mode, workspace.current_user.short_name is appended to the path
     fallback_paths = [
         f"/Workspace/Shared/.bundle/unified/dev/files/src/metadata/{metadata_path}",
         f"/Workspace/Shared/.bundle/unified/prod/files/src/metadata/{metadata_path}",
@@ -177,6 +178,7 @@ METADATA = load_metadata()
 # MAGIC ## Accessor Functions
 # MAGIC 
 # MAGIC Convenience functions to access specific parts of the metadata.
+# MAGIC Supports both old `target` (singular) and new `targets[]` (array) structures.
 
 # COMMAND ----------
 
@@ -185,74 +187,29 @@ def get_pipeline_config() -> dict:
     return METADATA.get("pipeline", {})
 
 
-def get_target_config() -> dict:
-    """Get target table configuration."""
-    return METADATA.get("target", {})
+# ============================================================================
+# Source-level accessors (shared definitions - same for old and new structure)
+# ============================================================================
+
+def get_all_sources() -> dict:
+    """Get configuration for all sources (shared properties only)."""
+    return METADATA.get("sources", {})
 
 
 def get_source_config(source_name: str) -> dict:
     """
-    Get configuration for a specific source.
+    Get shared configuration for a specific source.
     
     Args:
-        source_name: One of 'greenplum', 'sqlserver', 'kafka_cdc'
+        source_name: Source identifier (e.g., 'greenplum', 'kafka_cdc', 'pega_event_stream')
     
     Returns:
-        dict: Source configuration including table name, view name, column mapping
+        dict: Source configuration (table_name, description, source_system_value, catalog, schema)
     """
-    sources = METADATA.get("sources", {})
+    sources = get_all_sources()
     if source_name not in sources:
         raise ValueError(f"Unknown source: {source_name}. Valid sources: {list(sources.keys())}")
     return sources[source_name]
-
-
-def get_all_sources() -> dict:
-    """Get configuration for all sources."""
-    return METADATA.get("sources", {})
-
-
-def get_enabled_sources() -> dict:
-    """
-    Get only enabled sources for processing.
-    
-    Sources can be enabled/disabled in the metadata JSON using the 'enabled' flag.
-    This allows sequential merging of sources one at a time.
-    
-    Returns:
-        dict: Only sources where enabled=True (or enabled not specified, defaults to True)
-    """
-    all_sources = get_all_sources()
-    enabled = {
-        key: config 
-        for key, config in all_sources.items() 
-        if config.get("enabled", True)
-    }
-    print(f"Enabled sources: {list(enabled.keys())} (out of {list(all_sources.keys())})")
-    return enabled
-
-
-def get_target_schema() -> dict:
-    """Get the unified target schema definition."""
-    return get_target_config().get("schema", {})
-
-
-def get_transforms() -> dict:
-    """Get the transform definitions for data type conversions."""
-    return get_target_config().get("transforms", {})
-
-
-def get_column_mapping(source_name: str) -> dict:
-    """
-    Get the column mapping for a specific source.
-    
-    Args:
-        source_name: One of 'greenplum', 'sqlserver', 'kafka_cdc'
-    
-    Returns:
-        dict: Column mapping from source columns to target columns
-    """
-    source = get_source_config(source_name)
-    return source.get("column_mapping", {})
 
 
 def get_source_table_fqn(source_name: str) -> str:
@@ -260,7 +217,7 @@ def get_source_table_fqn(source_name: str) -> str:
     Get the fully-qualified table name for a source.
     
     Args:
-        source_name: One of 'greenplum', 'sqlserver', 'kafka_cdc'
+        source_name: Source identifier
     
     Returns:
         str: Fully-qualified table name (catalog.schema.table)
@@ -269,39 +226,226 @@ def get_source_table_fqn(source_name: str) -> str:
     return f"{source['catalog']}.{source['schema']}.{source['table_name']}"
 
 
-def get_scd2_keys() -> list:
+# ============================================================================
+# Target-level accessors (NEW - supports multiple targets via targets[] array)
+# ============================================================================
+
+def _has_new_structure() -> bool:
+    """Check if metadata uses new targets[] array structure."""
+    return "targets" in METADATA and isinstance(METADATA["targets"], list)
+
+
+def get_all_targets() -> list:
+    """Get all target configurations (new structure)."""
+    if _has_new_structure():
+        return METADATA.get("targets", [])
+    # Backward compatibility: wrap old target in a list
+    old_target = METADATA.get("target", {})
+    if old_target:
+        return [old_target]
+    return []
+
+
+def get_target(index: int = 0) -> dict:
+    """
+    Get a specific target by index (default: first target).
+    
+    Args:
+        index: Target index (default 0 for single-target pipelines)
+    
+    Returns:
+        dict: Target configuration including schema, transforms, source_mappings
+    """
+    targets = get_all_targets()
+    if not targets:
+        raise ValueError("No targets defined in metadata")
+    if index >= len(targets):
+        raise ValueError(f"Target index {index} out of range. Available: {len(targets)}")
+    return targets[index]
+
+
+def get_target_config() -> dict:
+    """
+    Get target table configuration.
+    
+    DEPRECATED: Use get_target(index) for new targets[] structure.
+    Kept for backward compatibility with old target (singular) structure.
+    """
+    # For backward compatibility, return old structure if exists
+    if "target" in METADATA:
+        return METADATA.get("target", {})
+    # Otherwise return first target from new structure
+    return get_target(0)
+
+
+def get_target_name(index: int = 0) -> str:
+    """Get the target table name."""
+    target = get_target(index)
+    # New structure uses 'name', old uses 'table_name'
+    return target.get("name") or target.get("table_name", "")
+
+
+def get_target_schema(index: int = 0) -> dict:
+    """Get the target schema definition."""
+    return get_target(index).get("schema", {})
+
+
+def get_transforms(index: int = 0) -> dict:
+    """Get the transform definitions for data type conversions."""
+    return get_target(index).get("transforms", {})
+
+
+def get_scd2_keys(index: int = 0) -> list:
     """Get the SCD2 key columns."""
-    return get_target_config().get("keys", ["customer_id"])
+    return get_target(index).get("keys", [])
 
 
-def get_sequence_column() -> str:
+def get_sequence_column(index: int = 0) -> str:
     """Get the sequence column for SCD2 ordering."""
-    return get_target_config().get("sequence_by", "event_timestamp")
+    return get_target(index).get("sequence_by", "event_timestamp")
 
 
-def get_delete_condition() -> str:
+def get_delete_condition(index: int = 0) -> str:
     """Get the delete condition expression."""
-    return get_target_config().get("delete_condition", "is_deleted = true")
+    return get_target(index).get("delete_condition", "is_deleted = true")
 
 
-def get_except_columns() -> list:
+def get_except_columns(index: int = 0) -> list:
     """Get columns excluded from SCD2 change tracking."""
-    return get_target_config().get("except_columns", [])
+    return get_target(index).get("except_columns", [])
 
 
-def get_track_history_except_columns() -> list:
+def get_track_history_except_columns(index: int = 0) -> list:
     """
     Get columns excluded from SCD2 history tracking.
     
     These columns are included in the target table but changes to them
     do NOT create new history records (updated in place like SCD Type 1).
     """
-    return get_target_config().get("track_history_except_columns", [])
+    return get_target(index).get("track_history_except_columns", [])
+
+
+# ============================================================================
+# Source Mapping accessors (NEW - per-target source configurations)
+# ============================================================================
+
+def get_source_mappings(target_index: int = 0) -> dict:
+    """
+    Get all source mappings for a target.
+    
+    In new structure: targets[index].source_mappings
+    In old structure: returns sources dict (column_mapping was in sources)
+    """
+    if _has_new_structure():
+        return get_target(target_index).get("source_mappings", {})
+    # Backward compatibility: old structure had mappings in sources
+    return get_all_sources()
+
+
+def get_source_mapping(source_name: str, target_index: int = 0) -> dict:
+    """
+    Get the source mapping for a specific source within a target.
+    
+    Args:
+        source_name: Source identifier
+        target_index: Target index (default 0)
+    
+    Returns:
+        dict: Source mapping including view_name, flow_name, column_mapping
+    """
+    mappings = get_source_mappings(target_index)
+    if source_name not in mappings:
+        raise ValueError(f"No mapping for source '{source_name}' in target[{target_index}]. Available: {list(mappings.keys())}")
+    return mappings[source_name]
+
+
+def get_enabled_source_mappings(target_index: int = 0) -> dict:
+    """
+    Get only enabled source mappings for a target.
+    
+    In new structure: filters targets[index].source_mappings by enabled flag
+    In old structure: filters sources by enabled flag
+    
+    Returns:
+        dict: Only source mappings where enabled=True (or not specified)
+    """
+    mappings = get_source_mappings(target_index)
+    enabled = {
+        key: config 
+        for key, config in mappings.items() 
+        if config.get("enabled", True)
+    }
+    print(f"Enabled source mappings for target[{target_index}]: {list(enabled.keys())}")
+    return enabled
+
+
+def get_enabled_sources() -> dict:
+    """
+    Get only enabled sources for processing.
+    
+    DEPRECATED: Use get_enabled_source_mappings(target_index) for new structure.
+    Kept for backward compatibility.
+    """
+    return get_enabled_source_mappings(0)
+
+
+def get_column_mapping(source_name: str, target_index: int = 0) -> dict:
+    """
+    Get the column mapping for a specific source.
+    
+    In new structure: targets[index].source_mappings[source].column_mapping
+    In old structure: sources[source].column_mapping
+    
+    Args:
+        source_name: Source identifier
+        target_index: Target index (default 0)
+    
+    Returns:
+        dict: Column mapping from source columns to target columns
+    """
+    mapping = get_source_mapping(source_name, target_index)
+    return mapping.get("column_mapping", {})
+
+
+def get_full_source_config(source_name: str, target_index: int = 0) -> dict:
+    """
+    Get complete source configuration by merging shared + target-specific.
+    
+    Merges:
+    - Shared source properties (table_name, description, source_system_value, catalog, schema)
+    - Target-specific mapping (view_name, flow_name, column_mapping, exclude_columns)
+    
+    This is the config needed by views.py and pipeline.py
+    
+    Args:
+        source_name: Source identifier
+        target_index: Target index (default 0)
+    
+    Returns:
+        dict: Complete merged configuration for the source
+    """
+    # Get shared properties
+    shared = get_source_config(source_name).copy()
+    
+    # Get target-specific mapping
+    mapping = get_source_mapping(source_name, target_index)
+    
+    # Merge them (mapping properties override shared if duplicated)
+    full_config = {
+        **shared,
+        **mapping,
+    }
+    
+    return full_config
 
 
 def get_target_table_name() -> str:
-    """Get the target table name."""
-    return get_target_config().get("table_name", "unified_customer_scd2")
+    """
+    Get the target table name.
+    
+    DEPRECATED: Use get_target_name(index) for new structure.
+    """
+    return get_target_name(0)
 
 # COMMAND ----------
 
@@ -314,8 +458,8 @@ def validate_metadata() -> bool:
     """
     Validate that the metadata has all required fields.
     
-    Note: catalog and schema are injected at runtime from Spark config,
-    so they are not validated here.
+    Supports both old (target) and new (targets[]) structures.
+    Note: catalog and schema are injected at runtime from Spark config.
     
     Returns:
         bool: True if valid, raises ValueError if invalid
@@ -326,28 +470,45 @@ def validate_metadata() -> bool:
     pipeline = get_pipeline_config()
     if not pipeline.get("name"):
         errors.append("Missing pipeline.name")
-    # Note: catalog is injected at runtime, not required in JSON
     
-    # Check target config
-    target = get_target_config()
-    if not target.get("table_name"):
-        errors.append("Missing target.table_name")
-    if not target.get("keys"):
-        errors.append("Missing target.keys")
-    if not target.get("sequence_by"):
-        errors.append("Missing target.sequence_by")
+    # Check targets (new structure) or target (old structure)
+    targets = get_all_targets()
+    if not targets:
+        errors.append("No targets defined (missing 'targets' array or 'target' object)")
     
-    # Check sources
+    for idx, target in enumerate(targets):
+        prefix = f"targets[{idx}]" if _has_new_structure() else "target"
+        
+        # Target name
+        target_name = target.get("name") or target.get("table_name")
+        if not target_name:
+            errors.append(f"Missing {prefix}.name or {prefix}.table_name")
+        
+        if not target.get("keys"):
+            errors.append(f"Missing {prefix}.keys")
+        if not target.get("sequence_by"):
+            errors.append(f"Missing {prefix}.sequence_by")
+        
+        # Check source mappings (new structure) or column_mapping in sources (old)
+        if _has_new_structure():
+            source_mappings = target.get("source_mappings", {})
+            if not source_mappings:
+                errors.append(f"Missing {prefix}.source_mappings")
+            for src_name, mapping in source_mappings.items():
+                if not mapping.get("column_mapping"):
+                    errors.append(f"Missing {prefix}.source_mappings.{src_name}.column_mapping")
+    
+    # Check sources (shared definitions)
     sources = get_all_sources()
     if not sources:
         errors.append("No sources defined")
     
     for source_name, source_config in sources.items():
         if not source_config.get("table_name"):
-            errors.append(f"Missing {source_name}.table_name")
-        if not source_config.get("column_mapping"):
-            errors.append(f"Missing {source_name}.column_mapping")
-        # Note: catalog and schema are injected at runtime
+            errors.append(f"Missing sources.{source_name}.table_name")
+        # Old structure: column_mapping in sources
+        if not _has_new_structure() and not source_config.get("column_mapping"):
+            errors.append(f"Missing sources.{source_name}.column_mapping")
     
     if errors:
         raise ValueError(f"Metadata validation failed:\n" + "\n".join(f"  - {e}" for e in errors))
@@ -364,22 +525,44 @@ def validate_metadata() -> bool:
 def print_metadata_summary():
     """Print a summary of the loaded metadata for debugging."""
     pipeline = get_pipeline_config()
-    target = get_target_config()
+    targets = get_all_targets()
     sources = get_all_sources()
     
     print("=" * 60)
     print(f"Pipeline: {pipeline.get('name')} v{pipeline.get('version')}")
+    print(f"Structure: {'NEW (targets[])' if _has_new_structure() else 'OLD (target)'}")
     print("=" * 60)
-    print(f"\nTarget Table: {target.get('table_name')}")
-    print(f"  Keys: {target.get('keys')}")
-    print(f"  Sequence By: {target.get('sequence_by')}")
-    print(f"  Except Columns: {target.get('except_columns')}")
     
-    print(f"\nSources ({len(sources)}):")
+    print(f"\nSources (shared definitions): {len(sources)}")
     for name, config in sources.items():
         fqn = f"{config.get('catalog')}.{config.get('schema')}.{config.get('table_name')}"
         print(f"  - {name}: {fqn}")
-        print(f"      View: {config.get('view_name')}")
-        print(f"      Flow: {config.get('flow_name')}")
-        print(f"      Columns: {len(config.get('column_mapping', {}))}")
-    print("=" * 60)
+    
+    print(f"\nTargets: {len(targets)}")
+    for idx, target in enumerate(targets):
+        target_name = target.get("name") or target.get("table_name")
+        print(f"\n  Target[{idx}]: {target_name}")
+        print(f"    Keys: {target.get('keys')}")
+        print(f"    Sequence By: {target.get('sequence_by')}")
+        print(f"    Except Columns: {target.get('except_columns', [])}")
+        
+        # Source mappings
+        if _has_new_structure():
+            mappings = target.get("source_mappings", {})
+            print(f"    Source Mappings: {len(mappings)}")
+            for src_name, mapping in mappings.items():
+                enabled = "✓" if mapping.get("enabled", True) else "✗"
+                print(f"      [{enabled}] {src_name}:")
+                print(f"          View: {mapping.get('view_name')}")
+                print(f"          Flow: {mapping.get('flow_name')}")
+                print(f"          Columns: {len(mapping.get('column_mapping', {}))}")
+        else:
+            # Old structure: show sources with their mappings
+            for src_name, config in sources.items():
+                enabled = "✓" if config.get("enabled", True) else "✗"
+                print(f"      [{enabled}] {src_name}:")
+                print(f"          View: {config.get('view_name')}")
+                print(f"          Flow: {config.get('flow_name')}")
+                print(f"          Columns: {len(config.get('column_mapping', {}))}")
+    
+    print("\n" + "=" * 60)

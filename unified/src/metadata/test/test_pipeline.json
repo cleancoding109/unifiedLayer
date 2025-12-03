@@ -1,0 +1,86 @@
+{
+  "pipeline": {
+    "name": "test_metadata_structure_pipeline",
+    "version": "1.0.0",
+    "description": "Test pipeline to validate new targets[] metadata structure"
+  },
+
+  "sources": {
+    "test_source_a": {
+      "table_name": "rdl_test_source_a",
+      "description": "Test source A - simulates first data source",
+      "source_system_value": "source_a"
+    },
+    "test_source_b": {
+      "table_name": "rdl_test_source_b",
+      "description": "Test source B - simulates second data source",
+      "source_system_value": "source_b"
+    }
+  },
+
+  "targets": [
+    {
+      "name": "unified_test_scd2",
+      "enabled": true,
+      "comment": "Test unified SCD2 table - validates metadata loading",
+      "scd_type": 2,
+      "keys": ["id"],
+      "sequence_by": "event_timestamp",
+      "delete_condition": "is_deleted = true",
+      "except_columns": [],
+      "track_history_except_columns": ["source_system", "ingestion_timestamp"],
+
+      "source_mappings": {
+        "test_source_a": {
+          "enabled": true,
+          "view_name": "test_source_a_v",
+          "flow_name": "source_a_to_unified_flow",
+          "exclude_columns": [],
+          "column_mapping": {
+            "id":                  {"source_col": "id",                  "transform": null},
+            "name":                {"source_col": "name",                "transform": null},
+            "value":               {"source_col": "amount",              "transform": "cast_int"},
+            "is_deleted":          {"source_col": "deleted_flag",        "transform": "cast_boolean"},
+            "event_timestamp":     {"source_col": "updated_at",          "transform": null},
+            "ingestion_timestamp": {"source_col": "ingestion_timestamp", "transform": null},
+            "source_system":       {"source_col": null,                  "transform": null, "default": "source_a"}
+          }
+        },
+        "test_source_b": {
+          "enabled": true,
+          "view_name": "test_source_b_v",
+          "flow_name": "source_b_to_unified_flow",
+          "exclude_columns": [],
+          "column_mapping": {
+            "id":                  {"source_col": "record_id",           "transform": null},
+            "name":                {"source_col": "full_name",           "transform": null},
+            "value":               {"source_col": "quantity",            "transform": "cast_int"},
+            "is_deleted":          {"source_col": "is_active",           "transform": "cast_boolean", "invert": true},
+            "event_timestamp":     {"source_col": "modified_ts",         "transform": null},
+            "ingestion_timestamp": {"source_col": "ingestion_timestamp", "transform": null},
+            "source_system":       {"source_col": null,                  "transform": null, "default": "source_b"}
+          }
+        }
+      },
+
+      "schema": {
+        "id":                  {"dtype": "STRING",    "nullable": false, "description": "Unique identifier"},
+        "name":                {"dtype": "STRING",    "nullable": true,  "description": "Record name"},
+        "value":               {"dtype": "INT",       "nullable": true,  "description": "Numeric value"},
+        "is_deleted":          {"dtype": "BOOLEAN",   "nullable": false, "description": "Soft delete flag"},
+        "event_timestamp":     {"dtype": "TIMESTAMP", "nullable": false, "description": "Event timestamp for SCD2"},
+        "ingestion_timestamp": {"dtype": "TIMESTAMP", "nullable": true,  "description": "Ingestion timestamp"},
+        "source_system":       {"dtype": "STRING",    "nullable": false, "description": "Source system identifier"}
+      },
+
+      "transforms": {
+        "cast_int": {"description": "Cast to INT type"},
+        "cast_boolean": {
+          "description": "Normalize boolean representations",
+          "true_values": ["TRUE", "1", "Y", "YES", "ACTIVE"],
+          "false_values": ["FALSE", "0", "N", "NO", "INACTIVE"]
+        }
+      }
+    }
+  ]
+}

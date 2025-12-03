@@ -2,453 +2,452 @@
 
 ## 1. Executive Summary
 
-### 1.1 MVP Scope
-This pipeline implements **Stream 3 (Unification Layer)** of the overall data architecture.
-Streams 1 & 2 (Bronze Raw & Bronze Processed) are already built and running upstream.
+### 1.1 Purpose
+This document describes the architecture and design of a **metadata-driven SCD Type 2 Pipeline Framework** 
+built on Databricks Lakeflow Declarative Pipelines. The framework supports merging multiple source paths 
+into unified streaming tables with automatic SCD2 history tracking.
 
-### 1.2 Goal
-Merge **3 source paths for the same Customer entity** into a **single SCD Type 2 Streaming Table**
-that provides a complete, sequenced history from legacy (Greenplum) to real-time (Kafka CDC).
+### 1.2 Key Capabilities
+- **Many-to-One Pattern**: Multiple sources → Single unified target (e.g., CDC consolidation)
+- **Many-to-Many Pattern**: Multiple sources → Multiple targets (e.g., workflow events)
+- **Metadata-Driven**: JSON configuration drives pipeline behavior
+- **Environment Agnostic**: Same code works across dev/prod with variable injection
 
-### 1.3 Framework
+### 1.3 Framework Components
 - **Lakeflow Python API:** `from pyspark import pipelines as dp`
-- **Target Table:** `unified_customer_scd2` (Lakeflow Streaming Table)
-- **Architecture:** Metadata-driven, modular design
-- **Configuration:** JSON metadata file as single source of truth
+- **Configuration:** JSON metadata files with `targets[]` array structure
+- **Runtime Injection:** Catalog/schema from Spark config (set by databricks.yml)
 
 ### 1.4 High-Level Architecture
 
 ```
-Source Paths (Same Customer Entity)                    Target
-===================================                    ======
-
-+-------------------------------+
-|  rdl_customer_hist_st         |---> gp_customer_v ---------+
-|  (Greenplum Legacy History)   |     (normalized view)      |
-|  Oldest data - loaded once    |                            |
-+-------------------------------+                            |
-                                                             |  3 x create_auto_cdc_flow()
-+-------------------------------+                            |  (all target same table)
-|  rdl_customer_init_st         |---> sql_customer_v --------+---> unified_customer_scd2
-|  (SQL Server Initial Snapshot)|     (normalized view)      |     (SCD Type 2 Table)
-|  Baseline state - loaded once |                            |
-+-------------------------------+                            |
-                                                             |
-+-------------------------------+                            |
-|  rdl_customer                 |---> cdc_customer_v --------+
-|  (Kafka CDC Stream)           |     (normalized view)
-|  Ongoing real-time changes    |
-+-------------------------------+
-
-Timeline: Greenplum (oldest) --> SQL Initial --> Kafka CDC (newest)
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    METADATA-DRIVEN SCD2 PIPELINE FRAMEWORK                   │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  ┌──────────────────────────────────────────────────────────────────────┐   │
+│  │  SOURCES (Shared Definitions)                                         │   │
+│  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐                   │   │
+│  │  │  Source A   │  │  Source B   │  │  Source C   │  ...              │   │
+│  │  │ table_name  │  │ table_name  │  │ table_name  │                   │   │
+│  │  │ description │  │ description │  │ description │                   │   │
+│  │  └─────────────┘  └─────────────┘  └─────────────┘                   │   │
+│  └──────────────────────────────────────────────────────────────────────┘   │
+│                                    │                                         │
+│                                    ▼                                         │
+│  ┌──────────────────────────────────────────────────────────────────────┐   │
+│  │  TARGETS (Per-Target Source Mappings)                                 │   │
+│  │  ┌────────────────────────────────────────────────────────────────┐  │   │
+│  │  │  Target 1: unified_entity_scd2                                  │  │   │
+│  │  │  ├── source_mappings:                                           │  │   │
+│  │  │  │   ├── source_a: {view_name, flow_name, column_mapping}       │  │   │
+│  │  │  │   └── source_b: {view_name, flow_name, column_mapping}       │  │   │
+│  │  │  ├── schema: {column definitions}                               │  │   │
+│  │  │  └── transforms: {type conversions}                             │  │   │
+│  │  └────────────────────────────────────────────────────────────────┘  │   │
+│  │  ┌────────────────────────────────────────────────────────────────┐  │   │
+│  │  │  Target 2: another_entity_scd2 (optional)                       │  │   │
+│  │  │  └── ... (same structure)                                       │  │   │
+│  │  └────────────────────────────────────────────────────────────────┘  │   │
+│  └──────────────────────────────────────────────────────────────────────┘   │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## 2. Data Sources
+## 2. Metadata Structure
 
-All 3 sources represent the **same Customer entity** from different paths/systems.
+### 2.1 New `targets[]` Array Structure
 
-### 2.1 Greenplum History (`rdl_customer_hist_st`)
-| Attribute | Value |
-|-----------|-------|
-| **Type** | Managed Table (loaded once via ADF/Lakeflow) |
-| **Content** | Legacy historical customer data from Greenplum |
-| **Purpose** | Provides the oldest history (e.g., 10+ years ago) |
-| **Load Pattern** | One-time historical load |
-| **Extra Columns** | `valid_from`, `valid_to`, `is_current` (pre-computed SCD2 from legacy) |
-
-### 2.2 SQL Server Initial (`rdl_customer_init_st`)
-| Attribute | Value |
-|-----------|-------|
-| **Type** | Managed Table (loaded once via ADF/Lakeflow) |
-| **Content** | Initial snapshot from the new SQL Server system |
-| **Purpose** | Provides baseline state before CDC stream started |
-| **Load Pattern** | One-time snapshot load |
-
-### 2.3 Kafka CDC Stream (`rdl_customer`)
-| Attribute | Value |
-|-----------|-------|
-| **Type** | Streaming Table (Bronze Processed output from Stream 2) |
-| **Content** | Real-time CDC events from SQL Server via Confluent Kafka |
-| **Purpose** | Ongoing incremental changes (inserts, updates, deletes) |
-| **Load Pattern** | Continuous streaming |
-
----
-
-## 3. Source Schemas (Verified from Catalog)
-
-All 3 tables have **aligned schemas** - minimal transformation needed.
-
-### 3.1 Common Columns (All 3 Sources)
-
-| Column | Type | SCD2 Role |
-|--------|------|-----------|
-| `customer_id` | STRING | **Primary Key** |
-| `customer_name` | STRING | Track changes |
-| `date_of_birth` | DATE | Track changes |
-| `email` | STRING | Track changes |
-| `phone` | STRING | Track changes |
-| `state` | STRING | Track changes |
-| `zip_code` | STRING | Track changes |
-| `status` | STRING | Track changes |
-| `last_login` | TIMESTAMP | Track changes |
-| `session_count` | INT | Track changes |
-| `page_views` | INT | Track changes |
-| `is_deleted` | BOOLEAN | **Delete indicator** |
-| `event_timestamp` | TIMESTAMP | **Sequence column** |
-| `ingestion_timestamp` | TIMESTAMP | Exclude from tracking |
-| `_version` | BIGINT | Exclude from tracking |
-
-### 3.2 Source-Specific Columns
-
-| Column | Greenplum | SQL Initial | Kafka CDC |
-|--------|-----------|-------------|-----------|
-| `source_system` | Yes (STRING) | Yes (STRING) | No - add as literal |
-| `valid_from` | Yes (TIMESTAMP) | No | No |
-| `valid_to` | Yes (TIMESTAMP) | No | No |
-| `is_current` | Yes (BOOLEAN) | No | No |
-
-### 3.3 Transformation Requirements
-
-| Source | Transformation |
-|--------|----------------|
-| **Greenplum** | Exclude `valid_from`, `valid_to`, `is_current` (legacy SCD2 columns) |
-| **SQL Initial** | No transformation needed |
-| **Kafka CDC** | Add `source_system = 'kafka_cdc'` literal |
-
----
-
-## 4. Technical Design
-
-### 4.1 Step 1: Imports & Setup
-
-```python
-from pyspark import pipelines as dp
-from pyspark.sql import functions as F
-```
-
-### 4.2 Metadata Loading
-
-All configuration is loaded from `pipeline_metadata.json`:
-
-```python
-# metadata_loader.py
-METADATA = load_metadata()  # Loads JSON file
-
-# Accessor functions
-get_source_config("greenplum")  # Returns source configuration
-get_column_mapping("sqlserver")  # Returns column mappings
-get_target_table_name()          # Returns "unified_customer_scd2"
-get_scd2_keys()                  # Returns ["customer_id"]
-```
-
-### 4.3 Schema Mapping
-
-Each source has different column names. The `apply_schema_mapping()` function handles:
-- **Column renaming**: `cust_id` → `customer_id`
-- **Type conversion**: STRING dates → DATE type
-- **Default values**: Missing `source_system` → "kafka_cdc"
-
-```python
-# transformations.py
-def apply_schema_mapping(df, column_mapping, source_name):
-    select_exprs = []
-    for target_col, mapping in column_mapping.items():
-        source_col = mapping.get("source_col")
-        transform = mapping.get("transform")
-        default_val = mapping.get("default")
-        
-        col_expr = _build_column_expression(source_col, transform, default_val)
-        select_exprs.append(col_expr.alias(target_col))
-    
-    return df.select(*select_exprs)
-```
-
-### 4.4 Source Views
-
-Views use schema mapping to normalize each source:
-
-```python
-# views.py
-@dp.view(name=GP_VIEW_NAME, comment=get_source_config("greenplum")["description"])
-def gp_customer_view():
-    df = spark.readStream.table(GP_HISTORY_TABLE)
-    return apply_schema_mapping(df, GP_COLUMN_MAPPING, "greenplum")
-
-@dp.view(name=SQL_VIEW_NAME, comment=get_source_config("sqlserver")["description"])
-def sql_customer_view():
-    df = spark.readStream.table(SQL_INITIAL_TABLE)
-    return apply_schema_mapping(df, SQL_COLUMN_MAPPING, "sqlserver")
-
-@dp.view(name=CDC_VIEW_NAME, comment=get_source_config("kafka_cdc")["description"])
-def cdc_customer_view():
-    df = spark.readStream.table(CDC_STREAM_TABLE)
-    return apply_schema_mapping(df, CDC_COLUMN_MAPPING, "kafka_cdc")
-```
-
-### 4.5 Target Streaming Table
-
-```python
-# pipeline.py
-dp.create_streaming_table(
-    name=TARGET_TABLE,  # From config: "unified_customer_scd2"
-    comment="Unified SCD Type 2 - complete customer history"
-)
-```
-
-### 4.6 Multiple CDC Flows
-
-**Design Decision:** Per Databricks documentation, we use **3 separate `create_auto_cdc_flow()` calls**
-targeting the same streaming table instead of `unionByName()`.
-
-**Benefits:**
-- Incremental updates without full refresh
-- Independent processing per source
-- Handles out-of-order data via `sequence_by`
-
-```python
-# pipeline.py - All config loaded from metadata
-dp.create_auto_cdc_flow(
-    name=GP_FLOW_NAME,           # From config
-    target=TARGET_TABLE,
-    source=GP_VIEW_NAME,         # From config
-    keys=SCD2_KEYS,              # From config: ["customer_id"]
-    sequence_by=F.col(SEQUENCE_COLUMN),
-    stored_as_scd_type="2",
-    apply_as_deletes=F.expr(DELETE_CONDITION),
-    except_column_list=SCD2_EXCEPT_COLUMNS
-)
-
-# Same pattern for SQL and CDC flows...
-```
-
----
-
-## 5. Sequencing Strategy
-
-### 5.1 Critical Requirement
-The `event_timestamp` values must be properly ordered across sources:
-- **Greenplum History:** Oldest timestamps (legacy data)
-- **SQL Server Initial:** Middle timestamps (new system baseline)
-- **Kafka CDC:** Newest timestamps (real-time changes)
-
-### 5.2 How It Works
-- All 3 sources use `event_timestamp` as the sequence column
-- The SCD2 logic uses this to determine record ordering
-- Records with newer timestamps supersede older ones for the same `customer_id`
-- `__START_AT` and `__END_AT` are automatically managed by Lakeflow
-
-### 5.3 Assumption
-The source data already has properly sequenced `event_timestamp` values.
-If not, a pre-processing step may be needed to ensure correct ordering.
-
----
-
-## 6. SCD Type 2 Output
-
-### 6.1 Target Table Columns
-
-| Column | Type | Description |
-|--------|------|-------------|
-| `customer_id` | STRING | Primary key |
-| `customer_name` | STRING | Tracked for changes |
-| `date_of_birth` | DATE | Tracked for changes |
-| `email` | STRING | Tracked for changes |
-| `phone` | STRING | Tracked for changes |
-| `state` | STRING | Tracked for changes |
-| `zip_code` | STRING | Tracked for changes |
-| `status` | STRING | Tracked for changes |
-| `last_login` | TIMESTAMP | Tracked for changes |
-| `session_count` | INT | Tracked for changes |
-| `page_views` | INT | Tracked for changes |
-| `__START_AT` | TIMESTAMP | SCD2 version start (auto-managed) |
-| `__END_AT` | TIMESTAMP | SCD2 version end (auto-managed, NULL = current) |
-
-### 6.2 Excluded from Change Tracking
-- `source_system` - Metadata only
-- `ingestion_timestamp` - ETL metadata
-- `_version` - Internal versioning
-- `is_deleted` - Used for delete detection, not tracking
-
-### 6.3 Delete Handling
-- When `is_deleted = true`, the record is logically deleted
-- Lakeflow closes the current version with `__END_AT` timestamp
-- No physical delete occurs (SCD2 preserves history)
-
----
-
-## 7. File Structure
-
-```
-unified/
-├── docs/
-│   ├── design_document.md              # This file
-│   └── implementation_plan.md          # Step-by-step plan
-├── src/
-│   ├── metadata/
-│   │   └── stream/unified/customer/
-│   │       └── pipeline_metadata.json  # Single source of truth (JSON)
-│   ├── metadata_loader.py              # Loads metadata, injects runtime config
-│   ├── transformations.py              # Type conversion functions
-│   ├── views.py                        # Source view definitions
-│   ├── pipeline.py                     # Main orchestration
-│   └── data_setup/                     # Test data scripts
-├── resources/
-│   ├── stream/unified/customer/
-│   │   ├── unified.pipeline.yml        # Pipeline resource definition
-│   │   └── unified.job.yml             # Job resource definition
-│   └── test/
-│       └── *.job.yml                   # Test job definitions
-├── tests/
-│   ├── test_pipeline.py                # Pipeline configuration tests
-│   ├── test_transform_funcs.py         # Transformation function tests
-│   └── test_views.py                   # View generation tests
-├── databricks.yml                      # Bundle configuration with env variables
-└── README.md
-```
-
-### Folder Structure Pattern
-
-Resources and metadata follow a consistent nested pattern:
-```
-{processing_type}/{layer}/{domain}/
-    stream/unified/customer/
-```
-
-- **stream** - Processing type (streaming pipelines)
-- **unified** - Layer (unified layer)
-- **customer** - Domain/entity (customer data)
-
-### Module Responsibilities
-
-| Module | Purpose |
-|--------|--------|
-| `pipeline_metadata.json` | Column mappings, target schema, source configs (no catalog/schema) |
-| `metadata_loader.py` | Load JSON, inject catalog/schema from Spark config, validate |
-| `transformations.py` | `apply_schema_mapping()`, date/boolean parsing |
-| `views.py` | 3 source views with schema normalization |
-| `pipeline.py` | Target table + 3 CDC flows |
-| `databricks.yml` | Environment-specific variables (catalog, schema, etc.) |
-
----
-
-## 8. Implementation Status
-
-| Step | Description | Status |
-|------|-------------|--------|
-| 1 | Imports & Setup | ✅ Complete |
-| 2 | Source Views (3 views) | ✅ Complete |
-| 3 | Target Streaming Table | ✅ Complete |
-| 4 | CDC Flows (3 flows) | ✅ Complete |
-| 5 | Testing & Validation | ✅ Complete |
-| 6 | Documentation | ✅ Complete |
-| 7 | Modular Refactoring | ✅ Complete |
-| 8 | Metadata-Driven Config | ✅ Complete |
-| 9 | Project Structure Refactoring | ✅ Complete |
-
-### Pipeline Successfully Deployed
-
-- **Pipeline ID:** `5c80b313-fc1f-47e9-8c1b-4f2c34ed1268`
-- **Target Table:** `ltc_insurance.unified_dev.unified_customer_scd2`
-- **All 3 CDC flows:** COMPLETED
-- **Unit Tests:** 50 tests passing
-
----
-
-## 9. Configuration Architecture
-
-### 9.1 Environment Variables (databricks.yml)
-
-Variables are defined per environment with no defaults at the top level:
-
-```yaml
-variables:
-  catalog:
-    description: Unity Catalog name for the pipeline
-  schema:
-    description: Schema name for the pipeline target
-  source_catalog:
-    description: Catalog containing source streaming tables
-  source_schema:
-    description: Schema containing source streaming tables
-
-targets:
-  dev:
-    variables:
-      catalog: ltc_insurance
-      schema: unified_dev
-      source_catalog: ltc_insurance
-      source_schema: raw_data_layer
-  prod:
-    variables:
-      catalog: ltc_insurance
-      schema: unified_prod
-      source_catalog: ltc_insurance
-      source_schema: raw_data_layer
-```
-
-### 9.2 Pipeline Configuration (unified.pipeline.yml)
-
-Variables are passed to the pipeline as Spark config:
-
-```yaml
-configuration:
-  pipeline.catalog: ${var.catalog}
-  pipeline.schema: ${var.schema}
-  pipeline.source_catalog: ${var.source_catalog}
-  pipeline.source_schema: ${var.source_schema}
-```
-
-### 9.3 Metadata Configuration (pipeline_metadata.json)
-
-The JSON file contains only non-environment-specific configuration:
+The framework uses a flexible metadata structure that separates shared source definitions from target-specific mappings:
 
 ```json
 {
   "pipeline": {
-    "name": "unified_scd2_pipeline",
-    "version": "2.0.0"
+    "name": "pipeline_name",
+    "version": "2.0.0",
+    "description": "Pipeline description"
   },
-  "target": {
-    "table_name": "unified_customer_scd2",
-    "keys": ["customer_id"],
-    "sequence_by": "event_timestamp",
-    "delete_condition": "is_deleted = true",
-    "except_columns": ["source_system", "ingestion_timestamp", "_version"]
-  },
+  
   "sources": {
-    "greenplum": { "table_name": "rdl_customer_hist_st", "column_mapping": {...} },
-    "sqlserver": { "table_name": "rdl_customer_init_st", "column_mapping": {...} },
-    "kafka_cdc": { "table_name": "rdl_customer", "column_mapping": {...} }
+    "source_a": {
+      "table_name": "rdl_source_a",
+      "description": "Source A description",
+      "source_system_value": "source_a"
+    },
+    "source_b": {
+      "table_name": "rdl_source_b",
+      "description": "Source B description",
+      "source_system_value": "source_b"
+    }
   },
-  "target_schema": { "columns": {...} }
+  
+  "targets": [
+    {
+      "name": "unified_entity_scd2",
+      "enabled": true,
+      "keys": ["entity_id"],
+      "sequence_by": "event_timestamp",
+      "delete_condition": "is_deleted = true",
+      "track_history_except_columns": ["source_system", "ingestion_timestamp"],
+      
+      "source_mappings": {
+        "source_a": {
+          "enabled": true,
+          "view_name": "source_a_v",
+          "flow_name": "source_a_to_unified_flow",
+          "column_mapping": {
+            "entity_id": {"source_col": "id", "transform": null},
+            "entity_name": {"source_col": "name", "transform": null}
+          }
+        },
+        "source_b": {
+          "enabled": true,
+          "view_name": "source_b_v",
+          "flow_name": "source_b_to_unified_flow",
+          "column_mapping": {
+            "entity_id": {"source_col": "record_id", "transform": null},
+            "entity_name": {"source_col": "full_name", "transform": null}
+          }
+        }
+      },
+      
+      "schema": {
+        "entity_id": {"dtype": "STRING", "nullable": false},
+        "entity_name": {"dtype": "STRING", "nullable": true}
+      },
+      
+      "transforms": {
+        "to_date": {"formats": ["yyyy-MM-dd", "MM/dd/yyyy"]},
+        "cast_boolean": {"true_values": ["TRUE", "1", "Y"]}
+      }
+    }
+  ]
 }
 ```
 
-### 9.4 Runtime Injection (metadata_loader.py)
-
-At runtime, `metadata_loader.py` reads from Spark config and injects into metadata:
-
-```python
-def load_metadata():
-    metadata = json.load(f)  # Load JSON
-    spark_config = get_spark_config()  # Read from Spark config
-    
-    # Inject catalog/schema into sources
-    for source_name, source_config in metadata["sources"].items():
-        source_config["catalog"] = spark_config["source_catalog"]
-        source_config["schema"] = spark_config["source_schema"]
-    
-    return metadata
-```
-
-### 9.5 Benefits of This Architecture
+### 2.2 Why This Structure?
 
 | Benefit | Description |
 |---------|-------------|
-| Environment isolation | Each target (dev/prod) has its own config |
-| No hardcoded values | Catalog/schema never in JSON |
-| Single source of truth | databricks.yml controls environment |
-| Easy promotion | Same code, different variables |
-| Local testing | Defaults in metadata_loader for pytest |
+| **Separation of concerns** | Shared source properties vs target-specific mappings |
+| **Flexibility** | Same source can map differently to different targets |
+| **Extensibility** | Add new targets without duplicating source definitions |
+| **Enable/disable** | Toggle sources per target independently |
+
+---
+
+## 3. Supported Patterns
+
+### 3.1 Many-to-One (CDC Consolidation)
+
+Multiple data sources feeding a single unified table:
+
+```
+┌─────────────┐
+│  Source A   │──┐
+└─────────────┘  │
+                 │
+┌─────────────┐  │    ┌─────────────────────┐
+│  Source B   │──┼───▶│  unified_scd2       │
+└─────────────┘  │    │  (Single Target)    │
+                 │    └─────────────────────┘
+┌─────────────┐  │
+│  Source C   │──┘
+└─────────────┘
+
+Use Case: Customer CDC from multiple source systems
+```
+
+### 3.2 Many-to-Many (Workflow Events)
+
+Multiple sources feeding multiple domain-specific targets:
+
+```
+┌─────────────────┐
+│  Event Stream   │──┬──▶ underwriting_scd2
+└─────────────────┘  │
+                     ├──▶ claims_scd2
+┌─────────────────┐  │
+│  History Table  │──┴──▶ policy_scd2
+└─────────────────┘
+
+Use Case: Workflow events split by domain/workflow_type
+```
+
+---
+
+## 4. Module Architecture
+
+### 4.1 File Structure
+
+```
+src/
+├── metadata/
+│   └── {processing_type}/{layer}/{domain}/
+│       └── {domain}_pipeline.json       # Metadata configuration
+├── metadata_loader.py                   # Load & inject runtime config
+├── transformations.py                   # Type conversion logic
+├── views.py                             # Source view generation
+└── pipeline.py                          # Main orchestration
+
+resources/
+└── {processing_type}/{layer}/{domain}/
+    ├── {domain}_pipeline.yml            # Pipeline resource
+    └── {domain}_job.yml                 # Job resource
+```
+
+### 4.2 Module Responsibilities
+
+| Module | Purpose |
+|--------|---------|
+| `metadata_loader.py` | Load JSON, inject catalog/schema from Spark config, provide accessor functions |
+| `transformations.py` | `apply_schema_mapping()` - column renaming, type conversion |
+| `views.py` | Create Lakeflow views for each enabled source mapping |
+| `pipeline.py` | Create streaming table and CDC flows |
+
+### 4.3 Accessor Functions
+
+```python
+# Target accessors (support multiple targets)
+get_all_targets()                        # List of all targets
+get_target(index=0)                      # Get specific target
+get_target_name(index=0)                 # Target table name
+get_target_schema(index=0)               # Column definitions
+get_scd2_keys(index=0)                   # Primary keys
+
+# Source mapping accessors (per-target)
+get_source_mappings(target_index=0)      # All source mappings for target
+get_enabled_source_mappings(target_index=0)  # Only enabled ones
+get_column_mapping(source_name, target_index=0)  # Column mapping
+get_full_source_config(source_name, target_index=0)  # Merged config
+```
+
+---
+
+## 5. Configuration Flow
+
+### 5.1 Environment Variables
+
+Defined in `databricks.yml` per environment:
+
+```yaml
+targets:
+  dev:
+    variables:
+      catalog: my_catalog
+      schema: dev_schema
+      source_catalog: my_catalog
+      source_schema: raw_data_layer
+  prod:
+    variables:
+      catalog: my_catalog
+      schema: prod_schema
+      source_catalog: my_catalog
+      source_schema: raw_data_layer
+```
+
+### 5.2 Variable Injection
+
+```
+databricks.yml (variables per environment)
+         │
+         ▼
+pipeline.yml (passes to Spark config)
+         │
+         ▼
+metadata_loader.py (reads Spark config, injects into metadata)
+         │
+         ▼
+Runtime metadata with catalog/schema populated
+```
+
+### 5.3 Pipeline Configuration
+
+```yaml
+# {domain}_pipeline.yml
+configuration:
+  bundle.sourcePath: ${workspace.file_path}/src
+  pipeline.catalog: ${var.catalog}
+  pipeline.schema: ${var.schema}
+  pipeline.source_catalog: ${var.source_catalog}
+  pipeline.source_schema: ${var.source_schema}
+  pipeline.metadata_path: stream/unified/{domain}/{domain}_pipeline.json
+```
+
+---
+
+## 6. SCD Type 2 Implementation
+
+### 6.1 CDC Flow Configuration
+
+Each source mapping creates a CDC flow:
+
+```python
+dp.create_auto_cdc_flow(
+    name=source_mapping["flow_name"],
+    target=target_name,
+    source=source_mapping["view_name"],
+    keys=get_scd2_keys(target_index),
+    sequence_by=F.col(get_sequence_column(target_index)),
+    stored_as_scd_type="2",
+    apply_as_deletes=F.expr(get_delete_condition(target_index)),
+    track_history_except_column_list=get_track_history_except_columns(target_index)
+)
+```
+
+### 6.2 Auto-Managed Columns
+
+Lakeflow automatically adds and manages:
+
+| Column | Purpose |
+|--------|---------|
+| `__START_AT` | Version start timestamp |
+| `__END_AT` | Version end timestamp (NULL = current) |
+
+### 6.3 Track History Except Columns
+
+Columns in `track_history_except_columns` are updated in-place (SCD Type 1 behavior) without creating new history records:
+
+```json
+"track_history_except_columns": [
+  "source_system",
+  "ingestion_timestamp",
+  "_version"
+]
+```
+
+---
+
+## 7. Schema Mapping
+
+### 7.1 Column Mapping Format
+
+```json
+"column_mapping": {
+  "target_column": {
+    "source_col": "source_column_name",
+    "transform": "transform_type",
+    "default": "default_value"
+  }
+}
+```
+
+### 7.2 Supported Transforms
+
+| Transform | Description |
+|-----------|-------------|
+| `null` | No transformation (direct mapping) |
+| `to_date` | Parse string to DATE |
+| `to_timestamp` | Parse string to TIMESTAMP |
+| `cast_string` | Cast to STRING |
+| `cast_int` | Cast to INT |
+| `cast_long` | Cast to LONG |
+| `cast_boolean` | Normalize boolean values |
+
+### 7.3 Default Values
+
+When `source_col` is null, the default value is used:
+
+```json
+"source_system": {
+  "source_col": null,
+  "transform": null,
+  "default": "kafka_cdc"
+}
+```
+
+---
+
+## 8. Deployment
+
+### 8.1 Bundle Commands
+
+```bash
+# Validate configuration
+databricks bundle validate
+
+# Deploy to workspace
+databricks bundle deploy
+
+# Run pipeline
+databricks bundle run {pipeline_name}
+
+# Run job
+databricks bundle run {job_name}
+```
+
+### 8.2 Workspace Structure
+
+```
+/Workspace/Shared/.bundle/{bundle_name}/{target}/
+├── files/
+│   └── src/
+│       ├── metadata/
+│       ├── pipeline.py
+│       ├── views.py
+│       └── ...
+└── artifacts/
+```
+
+---
+
+## 9. Adding New Pipelines
+
+### 9.1 Steps
+
+1. **Create metadata folder**: `src/metadata/stream/unified/{domain}/`
+2. **Create metadata JSON**: `{domain}_pipeline.json` with sources, targets, schema
+3. **Create resources folder**: `resources/stream/unified/{domain}/`
+4. **Create pipeline YAML**: `{domain}_pipeline.yml`
+5. **Create job YAML**: `{domain}_job.yml`
+6. **Update databricks.yml**: Add include pattern
+
+### 9.2 Include Pattern
+
+```yaml
+include:
+  - "resources/stream/unified/{domain}/{domain}_*.yml"
+```
+
+---
+
+## 10. Testing
+
+### 10.1 Test Pipeline
+
+A test pipeline validates the metadata structure:
+
+```
+resources/test/test_metadata.pipeline.yml
+src/metadata/test/test_pipeline.json
+src/test_pipeline.py
+```
+
+### 10.2 Unit Tests
+
+```
+tests/
+├── conftest.py         # Pytest fixtures
+├── main_test.py        # Pipeline configuration tests
+└── ...
+```
+
+---
+
+## 11. Best Practices
+
+1. **Naming Conventions**
+   - Folder pattern: `{processing_type}/{layer}/{domain}/`
+   - File pattern: `{domain}_pipeline.json`, `{domain}_pipeline.yml`
+
+2. **Enable/Disable Sources**
+   - Use `enabled: false` in source_mappings to disable without removing
+
+3. **Environment Isolation**
+   - Never hardcode catalog/schema in JSON
+   - All environment-specific values in databricks.yml
+
+4. **Sequential Merging**
+   - Enable sources one at a time for controlled data migration
