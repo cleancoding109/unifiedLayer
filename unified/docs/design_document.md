@@ -283,38 +283,53 @@ If not, a pre-processing step may be needed to ensure correct ordering.
 ```
 unified/
 ├── docs/
-│   ├── design_document.md          # This file
-│   └── implementation_plan.md      # Step-by-step plan
+│   ├── design_document.md              # This file
+│   └── implementation_plan.md          # Step-by-step plan
 ├── src/
 │   ├── metadata/
-│   │   └── pipeline_metadata.json  # Single source of truth (JSON)
-│   ├── metadata_loader.py          # Loads & validates metadata
-│   ├── config.py                   # Configuration from metadata
-│   ├── schema.py                   # Target schema & column mappings
-│   ├── transformations.py          # Type conversion functions
-│   ├── views.py                    # Source view definitions
-│   ├── pipeline.py                 # Main orchestration
-│   └── data_setup/                 # Test data scripts
+│   │   └── stream/unified/customer/
+│   │       └── pipeline_metadata.json  # Single source of truth (JSON)
+│   ├── metadata_loader.py              # Loads metadata, injects runtime config
+│   ├── transformations.py              # Type conversion functions
+│   ├── views.py                        # Source view definitions
+│   ├── pipeline.py                     # Main orchestration
+│   └── data_setup/                     # Test data scripts
 ├── resources/
-│   ├── unified.pipeline.yml        # Pipeline resource definition
-│   └── unified.job.yml             # Job resource definition
+│   ├── stream/unified/customer/
+│   │   ├── unified.pipeline.yml        # Pipeline resource definition
+│   │   └── unified.job.yml             # Job resource definition
+│   └── test/
+│       └── *.job.yml                   # Test job definitions
 ├── tests/
-│   └── main_test.py
-├── databricks.yml                   # Bundle configuration
+│   ├── test_pipeline.py                # Pipeline configuration tests
+│   ├── test_transform_funcs.py         # Transformation function tests
+│   └── test_views.py                   # View generation tests
+├── databricks.yml                      # Bundle configuration with env variables
 └── README.md
 ```
+
+### Folder Structure Pattern
+
+Resources and metadata follow a consistent nested pattern:
+```
+{processing_type}/{layer}/{domain}/
+    stream/unified/customer/
+```
+
+- **stream** - Processing type (streaming pipelines)
+- **unified** - Layer (unified layer)
+- **customer** - Domain/entity (customer data)
 
 ### Module Responsibilities
 
 | Module | Purpose |
 |--------|--------|
-| `pipeline_metadata.json` | Single source of truth for all configuration |
-| `metadata_loader.py` | Load JSON, validate, provide accessor functions |
-| `config.py` | Source tables, target table, SCD2 settings |
-| `schema.py` | Target schema, per-source column mappings |
+| `pipeline_metadata.json` | Column mappings, target schema, source configs (no catalog/schema) |
+| `metadata_loader.py` | Load JSON, inject catalog/schema from Spark config, validate |
 | `transformations.py` | `apply_schema_mapping()`, date/boolean parsing |
 | `views.py` | 3 source views with schema normalization |
 | `pipeline.py` | Target table + 3 CDC flows |
+| `databricks.yml` | Environment-specific variables (catalog, schema, etc.) |
 
 ---
 
@@ -330,25 +345,70 @@ unified/
 | 6 | Documentation | ✅ Complete |
 | 7 | Modular Refactoring | ✅ Complete |
 | 8 | Metadata-Driven Config | ✅ Complete |
+| 9 | Project Structure Refactoring | ✅ Complete |
 
 ### Pipeline Successfully Deployed
 
 - **Pipeline ID:** `5c80b313-fc1f-47e9-8c1b-4f2c34ed1268`
 - **Target Table:** `ltc_insurance.unified_dev.unified_customer_scd2`
 - **All 3 CDC flows:** COMPLETED
+- **Unit Tests:** 50 tests passing
 
 ---
 
-## 9. Metadata Configuration
+## 9. Configuration Architecture
 
-All configuration is stored in `src/metadata/pipeline_metadata.json`:
+### 9.1 Environment Variables (databricks.yml)
+
+Variables are defined per environment with no defaults at the top level:
+
+```yaml
+variables:
+  catalog:
+    description: Unity Catalog name for the pipeline
+  schema:
+    description: Schema name for the pipeline target
+  source_catalog:
+    description: Catalog containing source streaming tables
+  source_schema:
+    description: Schema containing source streaming tables
+
+targets:
+  dev:
+    variables:
+      catalog: ltc_insurance
+      schema: unified_dev
+      source_catalog: ltc_insurance
+      source_schema: raw_data_layer
+  prod:
+    variables:
+      catalog: ltc_insurance
+      schema: unified_prod
+      source_catalog: ltc_insurance
+      source_schema: raw_data_layer
+```
+
+### 9.2 Pipeline Configuration (unified.pipeline.yml)
+
+Variables are passed to the pipeline as Spark config:
+
+```yaml
+configuration:
+  pipeline.catalog: ${var.catalog}
+  pipeline.schema: ${var.schema}
+  pipeline.source_catalog: ${var.source_catalog}
+  pipeline.source_schema: ${var.source_schema}
+```
+
+### 9.3 Metadata Configuration (pipeline_metadata.json)
+
+The JSON file contains only non-environment-specific configuration:
 
 ```json
 {
   "pipeline": {
     "name": "unified_scd2_pipeline",
-    "version": "2.0.0",
-    "catalog": "ltc_insurance"
+    "version": "2.0.0"
   },
   "target": {
     "table_name": "unified_customer_scd2",
@@ -366,12 +426,29 @@ All configuration is stored in `src/metadata/pipeline_metadata.json`:
 }
 ```
 
-### Benefits of Metadata-Driven Approach
+### 9.4 Runtime Injection (metadata_loader.py)
+
+At runtime, `metadata_loader.py` reads from Spark config and injects into metadata:
+
+```python
+def load_metadata():
+    metadata = json.load(f)  # Load JSON
+    spark_config = get_spark_config()  # Read from Spark config
+    
+    # Inject catalog/schema into sources
+    for source_name, source_config in metadata["sources"].items():
+        source_config["catalog"] = spark_config["source_catalog"]
+        source_config["schema"] = spark_config["source_schema"]
+    
+    return metadata
+```
+
+### 9.5 Benefits of This Architecture
 
 | Benefit | Description |
 |---------|-------------|
-| Single source of truth | All config in one JSON file |
-| Easy modification | Change mappings without code changes |
-| Self-documenting | Configuration visible and readable |
-| Validation | Catches missing fields on load |
-| Extensibility | Add new sources by adding to JSON |
+| Environment isolation | Each target (dev/prod) has its own config |
+| No hardcoded values | Catalog/schema never in JSON |
+| Single source of truth | databricks.yml controls environment |
+| Easy promotion | Same code, different variables |
+| Local testing | Defaults in metadata_loader for pytest |

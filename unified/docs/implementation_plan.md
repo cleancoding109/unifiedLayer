@@ -122,8 +122,6 @@ Per Databricks documentation:
 - [x] Final review
 
 ### Phase 8: Modular Refactoring ✅ COMPLETE
-- [x] Created `config.py` - Configuration loaded from metadata
-- [x] Created `schema.py` - Target schema and column mappings
 - [x] Created `transformations.py` - Schema mapping transformation logic
 - [x] Created `views.py` - Source view definitions
 - [x] Refactored `pipeline.py` - Main orchestration only
@@ -134,6 +132,16 @@ Per Databricks documentation:
 - [x] All modules now load configuration from metadata
 - [x] Validation on load to catch missing required fields
 
+### Phase 10: Project Structure Refactoring ✅ COMPLETE
+- [x] Removed redundant `config.py` (thin wrapper around metadata_loader)
+- [x] Removed redundant `schema.py` (only used for TARGET_SCHEMA lookup)
+- [x] Centralized environment variables in `databricks.yml`
+- [x] Removed hardcoded catalog/schema from `pipeline_metadata.json`
+- [x] `metadata_loader.py` now injects catalog/schema from Spark config at runtime
+- [x] Reorganized resources to nested structure: `stream/unified/customer/`
+- [x] Reorganized metadata to nested structure: `stream/unified/customer/`
+- [x] All 50 unit tests passing
+
 ---
 
 ## Module Architecture
@@ -141,34 +149,63 @@ Per Databricks documentation:
 ```
 src/
 ├── metadata/
-│   └── pipeline_metadata.json   # Single source of truth
-├── metadata_loader.py           # Loads & validates metadata
-├── config.py                    # Configuration from metadata
-├── schema.py                    # Schema definitions from metadata
-├── transformations.py           # Type conversion logic
-├── views.py                     # Source view definitions
-└── pipeline.py                  # Main orchestration
+│   └── stream/unified/customer/
+│       └── pipeline_metadata.json   # Single source of truth
+├── metadata_loader.py               # Loads & validates metadata, injects runtime config
+├── transformations.py               # Type conversion logic
+├── views.py                         # Source view definitions
+└── pipeline.py                      # Main orchestration
+
+resources/
+├── stream/unified/customer/
+│   ├── unified.pipeline.yml         # Pipeline resource definition
+│   └── unified.job.yml              # Job resource definition
+└── test/
+    └── *.job.yml                    # Test job definitions
 ```
 
 ### Module Dependencies
 
 ```
+databricks.yml (variables per environment)
+         │
+         ▼
+unified.pipeline.yml (passes to Spark config)
+         │
+         ▼
 pipeline_metadata.json
          │
          ▼
-  metadata_loader.py
+  metadata_loader.py (injects catalog/schema from Spark config)
          │
-    ┌────┴────┐
-    ▼         ▼
-config.py  schema.py
-    │         │
-    └────┬────┘
          ▼
      views.py ──► transformations.py
          │
          ▼
     pipeline.py
 ```
+
+### Environment Configuration
+
+Variables are defined per environment in `databricks.yml`:
+
+```yaml
+targets:
+  dev:
+    variables:
+      catalog: ltc_insurance
+      schema: unified_dev
+      source_catalog: ltc_insurance
+      source_schema: raw_data_layer
+  prod:
+    variables:
+      catalog: ltc_insurance
+      schema: unified_prod
+      source_catalog: ltc_insurance
+      source_schema: raw_data_layer
+```
+
+These are passed to the pipeline via Spark config and injected into metadata at runtime.
 
 ---
 
@@ -277,6 +314,7 @@ All 3 flows use the same configuration:
 | 7 | Documentation | ✅ Complete | Done |
 | 8 | Modular Refactoring | ✅ Complete | Done |
 | 9 | Metadata-Driven Config | ✅ Complete | Done |
+| 10 | Project Structure Refactoring | ✅ Complete | Done |
 
 ---
 

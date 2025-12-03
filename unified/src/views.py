@@ -1,84 +1,53 @@
-# Databricks notebook source
-# MAGIC %md
-# MAGIC # Source Views Module
-# MAGIC 
-# MAGIC Defines the source views that normalize each input source to the unified schema.
-# MAGIC Each view reads from a Bronze streaming table and applies schema mapping.
-# MAGIC 
-# MAGIC View names and source tables are loaded from metadata.
-
-# COMMAND ----------
-
 from pyspark import pipelines as dp
+from pyspark.sql import SparkSession
 
-# COMMAND ----------
-
-# MAGIC %run ./config
-
-# COMMAND ----------
-
-# MAGIC %run ./schema
-
-# COMMAND ----------
-
-# MAGIC %run ./transformations
+try:
+    import metadata_loader
+    import transformations
+except ImportError:
+    from . import metadata_loader
+    from . import transformations
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## View 1: Greenplum Legacy History
+# MAGIC ## Dynamic View Generation
 # MAGIC 
-# MAGIC - **Source**: Loaded from metadata
-# MAGIC - **Characteristics**: Oldest historical data, one-time load
-# MAGIC - **Transformations**: Column renaming, date parsing, excludes legacy SCD2 columns
+# MAGIC Instead of hardcoding views for each source, we iterate through the
+# MAGIC configured sources in the metadata and generate views dynamically.
+# MAGIC This allows the pipeline to scale to any number of sources without code changes.
 
 # COMMAND ----------
 
-@dp.view(
-    name=GP_VIEW_NAME,
-    comment=get_source_config("greenplum").get("description", "Greenplum source view")
-)
-def gp_customer_view():
-    """Normalize Greenplum legacy data to unified schema."""
-    df = spark.readStream.table(GP_HISTORY_TABLE)
-    return apply_schema_mapping(df, GP_COLUMN_MAPPING, "greenplum")
+def _create_source_view(source_key: str, source_config: dict):
+    """
+    Factory function to create and register a Lakeflow view.
+    Using a factory ensures proper closure capture for the source_config.
+    """
+    view_name = source_config["view_name"]
+    description = source_config.get("description", f"Source view for {source_key}")
+    
+    # Construct fully qualified table name
+    table_fqn = f"{source_config['catalog']}.{source_config['schema']}.{source_config['table_name']}"
+    
+    @dp.view(name=view_name, comment=description)
+    def _dynamic_view_impl():
+        # Get Spark session
+        spark = SparkSession.builder.getOrCreate()
+        
+        # Read from the source table
+        df = spark.readStream.table(table_fqn)
+        # Apply schema mapping using the specific source configuration
+        return transformations.apply_schema_mapping(df, metadata_loader.get_column_mapping(source_key), source_key)
+    
+    return _dynamic_view_impl
+
+
 
 # COMMAND ----------
 
-# MAGIC %md
-# MAGIC ## View 2: SQL Server Initial Snapshot
-# MAGIC 
-# MAGIC - **Source**: Loaded from metadata
-# MAGIC - **Characteristics**: Baseline state, one-time load
-# MAGIC - **Transformations**: PascalCase to snake_case, INT to STRING for IDs
+# Iterate through all configured sources and create views
+for key, source_data in metadata_loader.get_all_sources().items():
+    _create_source_view(key, source_data)
 
-# COMMAND ----------
 
-@dp.view(
-    name=SQL_VIEW_NAME,
-    comment=get_source_config("sqlserver").get("description", "SQL Server source view")
-)
-def sql_customer_view():
-    """Normalize SQL Server initial snapshot to unified schema."""
-    df = spark.readStream.table(SQL_INITIAL_TABLE)
-    return apply_schema_mapping(df, SQL_COLUMN_MAPPING, "sqlserver")
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ## View 3: Kafka CDC Stream
-# MAGIC 
-# MAGIC - **Source**: Loaded from metadata
-# MAGIC - **Characteristics**: Ongoing real-time changes
-# MAGIC - **Transformations**: Adds default source_system value
-
-# COMMAND ----------
-
-@dp.view(
-    name=CDC_VIEW_NAME,
-    comment=get_source_config("kafka_cdc").get("description", "Kafka CDC source view")
-)
-def cdc_customer_view():
-    """Normalize Kafka CDC stream to unified schema."""
-    df = spark.readStream.table(CDC_STREAM_TABLE)
-    return apply_schema_mapping(df, CDC_COLUMN_MAPPING, "kafka_cdc")

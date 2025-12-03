@@ -1,18 +1,10 @@
-# Databricks notebook source
-# MAGIC %md
-# MAGIC # Transformations Module
-# MAGIC 
-# MAGIC Contains the schema mapping transformation logic that normalizes
-# MAGIC source DataFrames to the unified target schema.
-
-# COMMAND ----------
-
 from pyspark.sql import DataFrame
 from pyspark.sql import functions as F
 
-# COMMAND ----------
-
-# MAGIC %run ./schema
+try:
+    import metadata_loader
+except ImportError:
+    from . import metadata_loader
 
 # COMMAND ----------
 
@@ -42,11 +34,13 @@ def apply_schema_mapping(df: DataFrame, column_mapping: dict, source_name: str) 
     """
     select_exprs = []
     
+    target_schema = metadata_loader.get_target_schema()
+    
     for target_col, mapping in column_mapping.items():
         source_col = mapping.get("source_col")
         transform = mapping.get("transform")
         default_val = mapping.get("default")
-        target_type = TARGET_SCHEMA[target_col]["dtype"]
+        target_type = target_schema[target_col]["dtype"]
         
         # Build the column expression
         col_expr = _build_column_expression(source_col, transform, default_val, target_type)
@@ -55,6 +49,7 @@ def apply_schema_mapping(df: DataFrame, column_mapping: dict, source_name: str) 
         select_exprs.append(col_expr.alias(target_col))
     
     return df.select(*select_exprs)
+
 
 
 def _build_column_expression(source_col: str, transform: str, default_val, target_type: str):

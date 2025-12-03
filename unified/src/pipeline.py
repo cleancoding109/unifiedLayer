@@ -36,8 +36,7 @@
 # MAGIC ```
 # MAGIC 
 # MAGIC ## Module Structure:
-# MAGIC - `config.py` - Source/target configuration, SCD2 settings
-# MAGIC - `schema.py` - Target schema and column mappings
+# MAGIC - `metadata_loader.py` - Loads pipeline metadata from JSON, provides accessor functions
 # MAGIC - `transformations.py` - Schema mapping transformation logic
 # MAGIC - `views.py` - Source view definitions
 # MAGIC - `pipeline.py` - **This file** - Target table and CDC flows
@@ -52,18 +51,12 @@
 from pyspark import pipelines as dp
 from pyspark.sql import functions as F
 
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ## Load Modules
-
-# COMMAND ----------
-
-# MAGIC %run ./config
-
-# COMMAND ----------
-
-# MAGIC %run ./views
+try:
+    import metadata_loader
+    import views
+except ImportError:
+    from . import metadata_loader
+    from . import views
 
 # COMMAND ----------
 
@@ -77,7 +70,7 @@ from pyspark.sql import functions as F
 # COMMAND ----------
 
 dp.create_streaming_table(
-    name=TARGET_TABLE,
+    name=metadata_loader.get_target_table_name(),
     comment="Unified SCD Type 2 - complete customer history from Greenplum legacy to real-time Kafka CDC"
 )
 
@@ -87,65 +80,23 @@ dp.create_streaming_table(
 # MAGIC ---
 # MAGIC ## CDC Flows
 # MAGIC 
-# MAGIC Create 3 separate CDC flows - all targeting the same streaming table.
-# MAGIC 
-# MAGIC **Why multiple flows instead of UNION?**
-# MAGIC > Per Databricks docs: "Use append flow processing instead of UNION allows you to 
-# MAGIC > update the target table incrementally without running a full refresh."
+# MAGIC Dynamically create CDC flows for all configured sources.
+# MAGIC All flows target the same unified SCD2 table.
 
 # COMMAND ----------
 
-# MAGIC %md
-# MAGIC ### Flow 1: Greenplum Legacy History
-# MAGIC Oldest historical data - one-time load of legacy customer records.
+# Iterate through all configured sources and create CDC flows
+for source_key, source_config in metadata_loader.get_all_sources().items():
+    
+    dp.create_auto_cdc_flow(
+        name=source_config["flow_name"],
+        target=metadata_loader.get_target_table_name(),
+        source=source_config["view_name"],
+        keys=metadata_loader.get_scd2_keys(),
+        sequence_by=F.col(metadata_loader.get_sequence_column()),
+        stored_as_scd_type="2",
+        apply_as_deletes=F.expr(metadata_loader.get_delete_condition()),
+        except_column_list=metadata_loader.get_except_columns()
+    )
 
-# COMMAND ----------
 
-dp.create_auto_cdc_flow(
-    name=GP_FLOW_NAME,
-    target=TARGET_TABLE,
-    source=GP_VIEW_NAME,
-    keys=SCD2_KEYS,
-    sequence_by=F.col(SEQUENCE_COLUMN),
-    stored_as_scd_type="2",
-    apply_as_deletes=F.expr(DELETE_CONDITION),
-    except_column_list=SCD2_EXCEPT_COLUMNS
-)
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ### Flow 2: SQL Server Initial Snapshot
-# MAGIC Baseline state - one-time load of initial customer snapshot.
-
-# COMMAND ----------
-
-dp.create_auto_cdc_flow(
-    name=SQL_FLOW_NAME,
-    target=TARGET_TABLE,
-    source=SQL_VIEW_NAME,
-    keys=SCD2_KEYS,
-    sequence_by=F.col(SEQUENCE_COLUMN),
-    stored_as_scd_type="2",
-    apply_as_deletes=F.expr(DELETE_CONDITION),
-    except_column_list=SCD2_EXCEPT_COLUMNS
-)
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ### Flow 3: Kafka CDC Stream
-# MAGIC Ongoing real-time changes - continuous ingestion of CDC events.
-
-# COMMAND ----------
-
-dp.create_auto_cdc_flow(
-    name=CDC_FLOW_NAME,
-    target=TARGET_TABLE,
-    source=CDC_VIEW_NAME,
-    keys=SCD2_KEYS,
-    sequence_by=F.col(SEQUENCE_COLUMN),
-    stored_as_scd_type="2",
-    apply_as_deletes=F.expr(DELETE_CONDITION),
-    except_column_list=SCD2_EXCEPT_COLUMNS
-)

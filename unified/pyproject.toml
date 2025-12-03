@@ -29,7 +29,11 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/unified"]
+packages = ["src"]
+
+# Include metadata JSON files in the wheel package
+[tool.hatch.build.targets.wheel.force-include]
+"src/metadata" = "src/metadata"
 
 [project.scripts]
 main = "unified.main:main"

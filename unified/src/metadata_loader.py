@@ -1,14 +1,58 @@
-# Databricks notebook source
-# MAGIC %md
-# MAGIC # Metadata Loader Module
-# MAGIC 
-# MAGIC Loads pipeline configuration from the metadata JSON file.
-# MAGIC This provides a single source of truth for all pipeline settings.
+import json
+import os
 
 # COMMAND ----------
 
-import json
-import os
+# MAGIC %md
+# MAGIC ## Pipeline Configuration from Spark Config
+# MAGIC 
+# MAGIC These values are injected by databricks.yml via the pipeline configuration.
+# MAGIC They allow the same metadata to work across dev/prod environments.
+
+# COMMAND ----------
+
+def _get_spark_config() -> dict:
+    """
+    Get pipeline configuration from Spark config.
+    
+    These values are set in databricks.yml -> resources/pipeline/unified.pipeline.yml
+    via the 'configuration' section and injected as Spark config at runtime.
+    
+    Returns:
+        dict: Configuration with catalog, schema, source_catalog, source_schema
+    """
+    # Default values for local testing (when Spark is not available)
+    defaults = {
+        "catalog": "ltc_insurance",
+        "schema": "unified_dev",
+        "source_catalog": "ltc_insurance",
+        "source_schema": "raw_data_layer",
+    }
+    
+    try:
+        from pyspark.sql import SparkSession
+        spark = SparkSession.builder.getOrCreate()
+        
+        return {
+            "catalog": spark.conf.get("pipeline.catalog", defaults["catalog"]),
+            "schema": spark.conf.get("pipeline.schema", defaults["schema"]),
+            "source_catalog": spark.conf.get("pipeline.source_catalog", defaults["source_catalog"]),
+            "source_schema": spark.conf.get("pipeline.source_schema", defaults["source_schema"]),
+        }
+    except Exception:
+        # Return defaults if Spark is not available (e.g., during local testing)
+        return defaults
+
+
+# Cached config to avoid repeated Spark lookups
+_SPARK_CONFIG = None
+
+def get_spark_config() -> dict:
+    """Get cached Spark config."""
+    global _SPARK_CONFIG
+    if _SPARK_CONFIG is None:
+        _SPARK_CONFIG = _get_spark_config()
+    return _SPARK_CONFIG
 
 # COMMAND ----------
 
@@ -19,86 +63,112 @@ import os
 
 def _get_metadata_path() -> str:
     """
-    Get the path to the metadata JSON file.
+    Get the absolute path to the metadata JSON file.
     
-    In Databricks, notebooks are run from the workspace, so we need to
-    construct the path relative to the current notebook location.
+    Tries multiple strategies to locate the file:
+    1. importlib.resources (for installed packages)
+    2. Relative to __file__ (for direct execution)
+    3. Workspace path fallback (for DLT notebooks)
+    
+    Metadata path structure: metadata/stream/unified/customer/pipeline_metadata.json
     """
-    # When running in Databricks, use the notebook's directory
-    # The %run magic handles relative paths, but for JSON we need absolute
+    # New nested path relative to metadata folder
+    nested_path = os.path.join("stream", "unified", "customer", "pipeline_metadata.json")
+    
+    # Strategy 1: Try importlib.resources (Python 3.9+)
     try:
-        # Try to get the notebook path from Databricks context
-        notebook_path = dbutils.notebook.entry_point.getDbutils().notebook().getContext().notebookPath().get()
-        # Go up one level from src/ to get to src/metadata/
-        base_path = "/Workspace" + "/".join(notebook_path.split("/")[:-1])
-        return f"{base_path}/metadata/pipeline_metadata.json"
-    except:
-        # Fallback for local development/testing
-        return os.path.join(os.path.dirname(__file__), "metadata", "pipeline_metadata.json")
+        import importlib.resources as pkg_resources
+        # For Python 3.9+, use files()
+        try:
+            from importlib.resources import files
+            pkg_path = files('src.metadata.stream.unified.customer').joinpath('pipeline_metadata.json')
+            if hasattr(pkg_path, '_path'):
+                return str(pkg_path._path)
+            # For traversable objects
+            return str(pkg_path)
+        except (ImportError, TypeError, ModuleNotFoundError):
+            pass
+    except ImportError:
+        pass
+    
+    # Strategy 2: Try relative to __file__
+    try:
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        candidate = os.path.join(current_dir, "metadata", nested_path)
+        if os.path.exists(candidate):
+            return candidate
+    except NameError:
+        pass
+    
+    # Strategy 3: Try workspace path (for DLT notebooks)
+    # The bundle deploys files to this location
+    try:
+        from pyspark.sql import SparkSession
+        spark = SparkSession.builder.getOrCreate()
+        bundle_path = spark.conf.get("bundle.sourcePath", "")
+        if bundle_path:
+            candidate = os.path.join(bundle_path, "metadata", nested_path)
+            if os.path.exists(candidate):
+                return candidate
+    except Exception:
+        pass
+    
+    # Strategy 4: Hardcoded fallback for the bundle deployment path
+    fallback_paths = [
+        f"/Workspace/Users/cleancoding109@gmail.com/.bundle/unified/dev/files/src/metadata/{nested_path}",
+        f"/Workspace/Repos/unifiedLayer/unified/src/metadata/{nested_path}",
+    ]
+    for path in fallback_paths:
+        if os.path.exists(path):
+            return path
+    
+    # If all strategies fail, return the relative path and let load_metadata handle the error
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "metadata", nested_path)
 
 
 def load_metadata() -> dict:
     """
-    Load the pipeline metadata from JSON file.
+    Load the pipeline metadata from JSON file and inject runtime configuration.
+    
+    Catalog and schema values are read from Spark config (set by databricks.yml)
+    and injected into the metadata. This allows the same JSON to work across
+    dev/prod environments.
     
     Returns:
-        dict: Complete pipeline metadata
+        dict: Complete pipeline metadata with catalog/schema injected
+    
+    Raises:
+        FileNotFoundError: If metadata file cannot be found
+        json.JSONDecodeError: If metadata file is invalid JSON
     """
-    try:
-        # In Databricks, read from workspace file system
-        metadata_path = _get_metadata_path()
-        with open(metadata_path, 'r') as f:
-            return json.load(f)
-    except Exception as e:
-        # Fallback: try reading as a resource
-        print(f"Warning: Could not load metadata from file: {e}")
-        print("Using embedded metadata...")
-        return _get_embedded_metadata()
-
-
-def _get_embedded_metadata() -> dict:
-    """
-    Fallback embedded metadata in case file cannot be loaded.
-    This ensures the pipeline can still run even if the JSON file is inaccessible.
-    """
-    return {
-        "pipeline": {
-            "name": "unified_scd2_pipeline",
-            "version": "2.0.0",
-            "catalog": "ltc_insurance",
-            "target_schema": "unified_dev"
-        },
-        "target": {
-            "table_name": "unified_customer_scd2",
-            "keys": ["customer_id"],
-            "sequence_by": "event_timestamp",
-            "delete_condition": "is_deleted = true",
-            "except_columns": ["source_system", "ingestion_timestamp", "_version"]
-        },
-        "sources": {
-            "greenplum": {
-                "table_name": "rdl_customer_hist_st",
-                "catalog": "ltc_insurance",
-                "schema": "raw_data_layer",
-                "view_name": "gp_customer_v",
-                "flow_name": "gp_to_unified_flow"
-            },
-            "sqlserver": {
-                "table_name": "rdl_customer_init_st",
-                "catalog": "ltc_insurance",
-                "schema": "raw_data_layer",
-                "view_name": "sql_customer_v",
-                "flow_name": "sql_to_unified_flow"
-            },
-            "kafka_cdc": {
-                "table_name": "rdl_customer",
-                "catalog": "ltc_insurance",
-                "schema": "raw_data_layer",
-                "view_name": "cdc_customer_v",
-                "flow_name": "cdc_to_unified_flow"
-            }
-        }
-    }
+    metadata_path = _get_metadata_path()
+    
+    print(f"Loading metadata from: {metadata_path}")
+    
+    if not os.path.exists(metadata_path):
+        raise FileNotFoundError(f"Critical Error: Metadata file not found at {metadata_path}")
+        
+    with open(metadata_path, 'r') as f:
+        metadata = json.load(f)
+    
+    # Inject runtime configuration from Spark config (set by databricks.yml)
+    spark_config = get_spark_config()
+    
+    # Inject into pipeline config
+    if "pipeline" in metadata:
+        metadata["pipeline"]["catalog"] = spark_config["catalog"]
+        metadata["pipeline"]["target_schema"] = spark_config["schema"]
+    
+    # Inject into each source config
+    if "sources" in metadata:
+        for source_name, source_config in metadata["sources"].items():
+            source_config["catalog"] = spark_config["source_catalog"]
+            source_config["schema"] = spark_config["source_schema"]
+    
+    print(f"Injected config - catalog: {spark_config['catalog']}, schema: {spark_config['schema']}")
+    print(f"Injected config - source_catalog: {spark_config['source_catalog']}, source_schema: {spark_config['source_schema']}")
+    
+    return metadata
 
 # COMMAND ----------
 
@@ -213,6 +283,9 @@ def validate_metadata() -> bool:
     """
     Validate that the metadata has all required fields.
     
+    Note: catalog and schema are injected at runtime from Spark config,
+    so they are not validated here.
+    
     Returns:
         bool: True if valid, raises ValueError if invalid
     """
@@ -222,8 +295,7 @@ def validate_metadata() -> bool:
     pipeline = get_pipeline_config()
     if not pipeline.get("name"):
         errors.append("Missing pipeline.name")
-    if not pipeline.get("catalog"):
-        errors.append("Missing pipeline.catalog")
+    # Note: catalog is injected at runtime, not required in JSON
     
     # Check target config
     target = get_target_config()
@@ -244,6 +316,7 @@ def validate_metadata() -> bool:
             errors.append(f"Missing {source_name}.table_name")
         if not source_config.get("column_mapping"):
             errors.append(f"Missing {source_name}.column_mapping")
+        # Note: catalog and schema are injected at runtime
     
     if errors:
         raise ValueError(f"Metadata validation failed:\n" + "\n".join(f"  - {e}" for e in errors))
