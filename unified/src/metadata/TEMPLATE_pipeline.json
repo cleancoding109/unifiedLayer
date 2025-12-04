@@ -18,9 +18,10 @@
   "_comment_sources_1": "SOURCES: Shared source table definitions",
   "_comment_sources_2": "- Define each source table that feeds into this pipeline",
   "_comment_sources_3": "- table_name: Name of source table in raw_data_layer (without catalog.schema)",
-  "_comment_sources_4": "- source_system_value: Value to populate source_system column (for lineage)",
-  "_comment_sources_5": "- enabled: Set to false to disable this source without removing config",
-  "_comment_sources_6": "=============================================================================",
+  "_comment_sources_4": "- source_system_value: PRIMARY/JOIN KEY - used with entity keys for SCD2 CDC",
+  "_comment_sources_5": "- The source_system column distinguishes records from different sources",
+  "_comment_sources_6": "- enabled: Set to false to disable this source without removing config",
+  "_comment_sources_7": "=============================================================================",
   
   "sources": {
     "source_a": {
@@ -54,8 +55,10 @@
       "comment": "Unified SCD Type 2 - {entity description}",
 
       "_comment_scd2": "--- SCD2 Configuration ---",
+      "_comment_scd2_keys": "KEYS: Combined with source_system to form composite primary key",
+      "_comment_scd2_keys_1": "Example: keys=['customer_id'] + source_system -> unique per source",
       "scd_type": 2,
-      "keys": ["{primary_key_column}"],
+      "keys": ["{primary_key_column}", "source_system"],
       "sequence_by": "event_timestamp",
       "delete_condition": "is_deleted = true",
       
@@ -147,7 +150,7 @@
         "is_deleted":             {"dtype": "BOOLEAN",   "nullable": false, "description": "Soft delete flag for CDC"},
         "event_timestamp":        {"dtype": "TIMESTAMP", "nullable": false, "description": "Event timestamp for SCD2 sequencing"},
         "ingestion_timestamp":    {"dtype": "TIMESTAMP", "nullable": true,  "description": "When record was ingested"},
-        "source_system":          {"dtype": "STRING",    "nullable": false, "description": "Origin system identifier"},
+        "source_system":          {"dtype": "STRING",    "nullable": false, "description": "PRIMARY/JOIN KEY - Origin system identifier, part of composite key with entity keys"},
         "source_record_start_dt": {"dtype": "TIMESTAMP", "nullable": true,  "description": "Original SCD start date from source"},
         "source_record_end_dt":   {"dtype": "TIMESTAMP", "nullable": true,  "description": "Original SCD end date from source"}
       },
