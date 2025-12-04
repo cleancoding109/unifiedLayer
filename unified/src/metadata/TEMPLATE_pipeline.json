@@ -87,6 +87,21 @@
           "view_name": "{source_a}_{entity}_v",
           "flow_name": "{source_a}_to_{entity}_flow",
           
+          "_comment_dedup": "--- Deduplication & Out-of-Order Handling ---",
+          "_comment_dedup_1": "- enabled: Set to true for Kafka/streaming sources with potential duplicates",
+          "_comment_dedup_2": "- watermark_delay: How long to wait for late-arriving data (e.g., '10 minutes', '1 hour')",
+          "_comment_dedup_3": "- dedup_keys: Business keys + timestamp to identify logical duplicates",
+          "_comment_dedup_4": "- offset_dedup: Enable for Kafka sources to dedup by partition+offset (producer retries)",
+          "_comment_dedup_5": "- For non-streaming sources (batch/historical), set enabled: false",
+          "dedup_config": {
+            "enabled": false,
+            "watermark_column": "event_timestamp",
+            "watermark_delay": "10 minutes",
+            "dedup_keys": ["{primary_key}", "event_timestamp"],
+            "offset_dedup": false,
+            "offset_columns": ["kafka_partition", "kafka_offset"]
+          },
+          
           "_comment_column_mapping": "--- Column Mapping ---",
           "_comment_cm_1": "Format: 'target_col': {'source_col': 'src_col', 'transform': 'type', 'default': value}",
           "_comment_cm_2": "- source_col: Source column name, or null if not in source",
@@ -113,6 +128,18 @@
           "enabled": true,
           "view_name": "{source_b}_{entity}_v",
           "flow_name": "{source_b}_to_{entity}_flow",
+          
+          "_comment_dedup": "--- Deduplication for Kafka/Streaming Source ---",
+          "_comment_dedup_1": "Enable dedup for real-time streaming sources that may have duplicates",
+          "dedup_config": {
+            "enabled": true,
+            "watermark_column": "event_timestamp",
+            "watermark_delay": "10 minutes",
+            "dedup_keys": ["{primary_key}", "event_timestamp"],
+            "offset_dedup": true,
+            "offset_columns": ["kafka_partition", "kafka_offset"]
+          },
+          
           "column_mapping": {
             "{primary_key}":          {"source_col": "{source_pk_col}",      "transform": null},
             "{business_col_1}":       {"source_col": "{source_col_1}",       "transform": null},

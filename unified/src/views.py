@@ -5,10 +5,12 @@ try:
     import metadata_loader
     import mapper
     import transformations
+    import dedup
 except ImportError:
     from . import metadata_loader
     from . import mapper
     from . import transformations
+    from . import dedup
 
 # COMMAND ----------
 
@@ -21,8 +23,8 @@ except ImportError:
 # MAGIC
 # MAGIC ## Pipeline Flow:
 # MAGIC ```
-# MAGIC Source Table → apply_mapping() → apply_transforms() → View Output
-# MAGIC                 (rename cols)     (type conversions)
+# MAGIC Source Table → apply_mapping() → apply_transforms() → apply_dedup() → View Output
+# MAGIC                 (rename cols)     (type conversions)   (watermark+dedup)
 # MAGIC ```
 
 # COMMAND ----------
@@ -72,7 +74,16 @@ def _create_source_view(source_key: str, source_mapping: dict, target_index: int
             target_index
         )
         
-        return df_transformed
+        # Step 3: Apply deduplication (watermark + dropDuplicates)
+        # Only applied if dedup_config.enabled = true in source_mapping
+        # This handles:
+        #   - Out-of-order Kafka events (via watermark)
+        #   - Duplicate messages from producer retries (via offset dedup)
+        #   - Logical duplicates (via business key dedup)
+        dedup_config = source_mapping.get("dedup_config", {})
+        df_deduped = dedup.apply_dedup(df_transformed, dedup_config)
+        
+        return df_deduped
     
     return _dynamic_view_impl
 
