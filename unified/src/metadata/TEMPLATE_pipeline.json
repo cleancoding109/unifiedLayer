@@ -1,0 +1,190 @@
+{
+  "_comment": "=============================================================================",
+  "_comment_1": "METADATA TEMPLATE FOR SCD TYPE 2 PIPELINE",
+  "_comment_2": "=============================================================================",
+  "_comment_3": "Copy this template to: stream/unified/{domain}/{domain}_pipeline.json",
+  "_comment_4": "Replace all {PLACEHOLDER} values with your specific configuration",
+  "_comment_5": "Remove all _comment fields before deploying",
+  "_comment_6": "=============================================================================",
+
+  "pipeline": {
+    "_comment": "Pipeline-level metadata",
+    "name": "{domain}_scd2_pipeline",
+    "version": "2.0.0",
+    "description": "Unified SCD Type 2 Pipeline - {description of data being unified}"
+  },
+
+  "_comment_sources": "=============================================================================",
+  "_comment_sources_1": "SOURCES: Shared source table definitions",
+  "_comment_sources_2": "- Define each source table that feeds into this pipeline",
+  "_comment_sources_3": "- table_name: Name of source table in raw_data_layer (without catalog.schema)",
+  "_comment_sources_4": "- source_system_value: Value to populate source_system column (for lineage)",
+  "_comment_sources_5": "- enabled: Set to false to disable this source without removing config",
+  "_comment_sources_6": "=============================================================================",
+  
+  "sources": {
+    "source_a": {
+      "enabled": true,
+      "table_name": "rdl_{entity}_source_a_st",
+      "description": "Description of source A (e.g., 'Historical data from legacy system')",
+      "source_system_value": "source_a",
+      "exclude_columns": []
+    },
+    "source_b": {
+      "enabled": true,
+      "table_name": "rdl_{entity}_source_b_st",
+      "description": "Description of source B (e.g., 'Real-time CDC stream from Kafka')",
+      "source_system_value": "source_b",
+      "exclude_columns": ["_internal_col"]
+    }
+  },
+
+  "_comment_targets": "=============================================================================",
+  "_comment_targets_1": "TARGETS: Array of target streaming tables",
+  "_comment_targets_2": "- Most pipelines have ONE target (many-to-one pattern)",
+  "_comment_targets_3": "- Multi-target pipelines can have multiple entries (many-to-many pattern)",
+  "_comment_targets_4": "- Each target has its own source_mappings, schema, and SCD2 config",
+  "_comment_targets_5": "=============================================================================",
+
+  "targets": [
+    {
+      "_comment": "Target 1: Main unified SCD2 table",
+      "name": "unified_{entity}_scd2",
+      "enabled": true,
+      "comment": "Unified SCD Type 2 - {entity description}",
+
+      "_comment_scd2": "--- SCD2 Configuration ---",
+      "scd_type": 2,
+      "keys": ["{primary_key_column}"],
+      "sequence_by": "event_timestamp",
+      "delete_condition": "is_deleted = true",
+      
+      "_comment_except": "Columns excluded from SCD2 comparison (written but don't trigger new version)",
+      "except_columns": [],
+      
+      "_comment_track_history": "Columns updated in-place without creating new SCD2 version",
+      "track_history_except_columns": [
+        "source_system",
+        "ingestion_timestamp",
+        "source_record_start_dt",
+        "source_record_end_dt"
+      ],
+
+      "_comment_source_mappings": "=============================================================================",
+      "_comment_source_mappings_1": "SOURCE_MAPPINGS: Per-source configuration for this target",
+      "_comment_source_mappings_2": "- view_name: Name of the Lakeflow view created for this source",
+      "_comment_source_mappings_3": "- flow_name: Name of the CDC flow (must be unique across pipeline)",
+      "_comment_source_mappings_4": "- enabled: Set to false to disable this source for sequential merging",
+      "_comment_source_mappings_5": "- column_mapping: Maps target columns to source columns + transforms",
+      "_comment_source_mappings_6": "=============================================================================",
+
+      "source_mappings": {
+        "source_a": {
+          "enabled": true,
+          "view_name": "{source_a}_{entity}_v",
+          "flow_name": "{source_a}_to_{entity}_flow",
+          
+          "_comment_column_mapping": "--- Column Mapping ---",
+          "_comment_cm_1": "Format: 'target_col': {'source_col': 'src_col', 'transform': 'type', 'default': value}",
+          "_comment_cm_2": "- source_col: Source column name, or null if not in source",
+          "_comment_cm_3": "- transform: null, to_date, to_timestamp, epoch_to_timestamp, cast_*, etc.",
+          "_comment_cm_4": "- default: Value to use when source_col is null",
+          
+          "column_mapping": {
+            "{primary_key}":          {"source_col": "{source_pk_col}",      "transform": null},
+            "{business_col_1}":       {"source_col": "{source_col_1}",       "transform": null},
+            "{business_col_2}":       {"source_col": "{source_col_2}",       "transform": null},
+            "{date_column}":          {"source_col": "{source_date}",        "transform": "to_date"},
+            "{timestamp_column}":     {"source_col": "{source_ts}",          "transform": "to_timestamp"},
+            "{epoch_column}":         {"source_col": "{source_epoch_ms}",    "transform": "epoch_to_timestamp"},
+            "{boolean_column}":       {"source_col": "{source_bool}",        "transform": "cast_boolean"},
+            "is_deleted":             {"source_col": "is_deleted",           "transform": null},
+            "event_timestamp":        {"source_col": "event_timestamp",      "transform": null},
+            "ingestion_timestamp":    {"source_col": "ingestion_timestamp",  "transform": null},
+            "source_system":          {"source_col": null,                   "transform": null, "default": "source_a"},
+            "source_record_start_dt": {"source_col": "valid_from",           "transform": null},
+            "source_record_end_dt":   {"source_col": "valid_to",             "transform": null}
+          }
+        },
+        "source_b": {
+          "enabled": true,
+          "view_name": "{source_b}_{entity}_v",
+          "flow_name": "{source_b}_to_{entity}_flow",
+          "column_mapping": {
+            "{primary_key}":          {"source_col": "{source_pk_col}",      "transform": null},
+            "{business_col_1}":       {"source_col": "{source_col_1}",       "transform": null},
+            "{business_col_2}":       {"source_col": "{source_col_2}",       "transform": null},
+            "{date_column}":          {"source_col": "{source_date}",        "transform": "to_date"},
+            "{timestamp_column}":     {"source_col": "{source_ts}",          "transform": "to_timestamp"},
+            "{epoch_column}":         {"source_col": "{source_epoch_ms}",    "transform": "epoch_to_timestamp"},
+            "{boolean_column}":       {"source_col": "{source_bool}",        "transform": "cast_boolean"},
+            "is_deleted":             {"source_col": "is_deleted",           "transform": null},
+            "event_timestamp":        {"source_col": "event_timestamp",      "transform": null},
+            "ingestion_timestamp":    {"source_col": "ingestion_timestamp",  "transform": null},
+            "source_system":          {"source_col": null,                   "transform": null, "default": "source_b"},
+            "source_record_start_dt": {"source_col": null,                   "transform": null, "default": null},
+            "source_record_end_dt":   {"source_col": null,                   "transform": null, "default": null}
+          }
+        }
+      },
+
+      "_comment_schema": "=============================================================================",
+      "_comment_schema_1": "SCHEMA: Target table column definitions",
+      "_comment_schema_2": "- dtype: STRING, INT, LONG, BOOLEAN, DATE, TIMESTAMP, DECIMAL(p,s)",
+      "_comment_schema_3": "- nullable: true/false - whether column allows nulls",
+      "_comment_schema_4": "- description: Column documentation",
+      "_comment_schema_5": "=============================================================================",
+
+      "schema": {
+        "{primary_key}":          {"dtype": "STRING",    "nullable": false, "description": "Primary key - unique identifier"},
+        "{business_col_1}":       {"dtype": "STRING",    "nullable": true,  "description": "Business column 1 description"},
+        "{business_col_2}":       {"dtype": "STRING",    "nullable": true,  "description": "Business column 2 description"},
+        "{date_column}":          {"dtype": "DATE",      "nullable": true,  "description": "Date column description"},
+        "{timestamp_column}":     {"dtype": "TIMESTAMP", "nullable": true,  "description": "Timestamp column description"},
+        "{epoch_column}":         {"dtype": "TIMESTAMP", "nullable": true,  "description": "Epoch-converted timestamp"},
+        "{boolean_column}":       {"dtype": "BOOLEAN",   "nullable": true,  "description": "Boolean column description"},
+        "{decimal_column}":       {"dtype": "DECIMAL(10,2)", "nullable": true, "description": "Decimal column description"},
+        "is_deleted":             {"dtype": "BOOLEAN",   "nullable": false, "description": "Soft delete flag for CDC"},
+        "event_timestamp":        {"dtype": "TIMESTAMP", "nullable": false, "description": "Event timestamp for SCD2 sequencing"},
+        "ingestion_timestamp":    {"dtype": "TIMESTAMP", "nullable": true,  "description": "When record was ingested"},
+        "source_system":          {"dtype": "STRING",    "nullable": false, "description": "Origin system identifier"},
+        "source_record_start_dt": {"dtype": "TIMESTAMP", "nullable": true,  "description": "Original SCD start date from source"},
+        "source_record_end_dt":   {"dtype": "TIMESTAMP", "nullable": true,  "description": "Original SCD end date from source"}
+      },
+
+      "_comment_transforms": "=============================================================================",
+      "_comment_transforms_1": "TRANSFORMS: Documentation of available transforms (used by transformations.py)",
+      "_comment_transforms_2": "This section is for reference - actual transform logic is in TRANSFORM_REGISTRY",
+      "_comment_transforms_3": "=============================================================================",
+
+      "transforms": {
+        "to_date": {
+          "description": "Parse string to DATE type",
+          "formats": ["yyyy-MM-dd", "MM/dd/yyyy", "dd-MMM-yyyy", "yyyyMMdd"]
+        },
+        "to_timestamp": {
+          "description": "Parse string to TIMESTAMP type",
+          "formats": ["yyyy-MM-dd HH:mm:ss", "yyyy-MM-dd'T'HH:mm:ss", "yyyy-MM-dd'T'HH:mm:ss.SSS", "yyyy-MM-dd'T'HH:mm:ss.SSSZ", "MM/dd/yyyy HH:mm:ss"]
+        },
+        "epoch_to_timestamp": {
+          "description": "Convert epoch milliseconds to TIMESTAMP (default: ms)",
+          "variants": ["epoch_to_timestamp", "epoch_to_timestamp_ms", "epoch_to_timestamp_s"]
+        },
+        "epoch_to_timestamp_ms": {
+          "description": "Convert epoch milliseconds to TIMESTAMP (Kafka, JavaScript Date.now())"
+        },
+        "epoch_to_timestamp_s": {
+          "description": "Convert epoch seconds to TIMESTAMP (Unix timestamp, Python time.time())"
+        },
+        "cast_string": {"description": "Cast to STRING type"},
+        "cast_int": {"description": "Cast to INT type"},
+        "cast_long": {"description": "Cast to LONG type"},
+        "cast_boolean": {
+          "description": "Normalize various boolean representations",
+          "true_values": ["TRUE", "1", "Y", "YES"],
+          "false_values": ["FALSE", "0", "N", "NO"]
+        }
+      }
+    }
+  ]
+}
