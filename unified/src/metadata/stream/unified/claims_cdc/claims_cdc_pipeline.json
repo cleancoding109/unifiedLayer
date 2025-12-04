@@ -1,0 +1,107 @@
+{
+  "pipeline": {
+    "name": "unified_claims_cdc_scd2_pipeline",
+    "version": "1.0.0",
+    "description": "Unified SCD Type 2 Pipeline - merges claims from legacy system and Kafka CDC with dedup"
+  },
+
+  "sources": {
+    "legacy_claims": {
+      "table_name": "rdl_claims_legacy_st",
+      "description": "Legacy claims system - historical claims data (batch load)",
+      "source_system_value": "legacy_claims"
+    },
+    "kafka_claims": {
+      "table_name": "rdl_claims_kafka_st",
+      "description": "Kafka CDC claims stream - real-time claims with potential duplicates",
+      "source_system_value": "kafka_claims"
+    }
+  },
+
+  "targets": [
+    {
+      "name": "unified_claims_scd2",
+      "enabled": true,
+      "comment": "Unified SCD Type 2 - complete claims history from legacy to real-time Kafka CDC",
+      "scd_type": 2,
+      "keys": ["claim_id", "source_system"],
+      "sequence_by": "event_timestamp",
+      "delete_condition": "is_deleted = true",
+      "except_columns": [],
+      "track_history_except_columns": ["source_system", "ingestion_timestamp"],
+
+      "source_mappings": {
+        "legacy_claims": {
+          "enabled": true,
+          "view_name": "legacy_claims_v",
+          "flow_name": "legacy_to_unified_claims_flow",
+          "dedup_config": {
+            "enabled": false
+          },
+          "column_mapping": {
+            "claim_id":            {"source_col": "claim_id",           "transform": null},
+            "policy_id":           {"source_col": "policy_id",          "transform": null},
+            "customer_id":         {"source_col": "customer_id",        "transform": null},
+            "claim_type":          {"source_col": "claim_type",         "transform": null},
+            "claim_amount":        {"source_col": "claim_amount",       "transform": null},
+            "claim_status":        {"source_col": "claim_status",       "transform": null},
+            "filed_date":          {"source_col": "filed_date",         "transform": null},
+            "processed_date":      {"source_col": "processed_date",     "transform": null},
+            "adjuster_id":         {"source_col": "adjuster_id",        "transform": null},
+            "description":         {"source_col": "description",        "transform": null},
+            "is_deleted":          {"source_col": "is_deleted",         "transform": null},
+            "event_timestamp":     {"source_col": "event_timestamp",    "transform": null},
+            "ingestion_timestamp": {"source_col": "ingestion_timestamp","transform": null},
+            "source_system":       {"source_col": null,                 "transform": null, "default": "legacy_claims"}
+          }
+        },
+        "kafka_claims": {
+          "enabled": true,
+          "view_name": "kafka_claims_v",
+          "flow_name": "kafka_to_unified_claims_flow",
+          "dedup_config": {
+            "enabled": true,
+            "watermark_column": "event_timestamp",
+            "watermark_delay": "10 minutes",
+            "dedup_keys": ["claim_id", "event_timestamp"],
+            "offset_dedup": true,
+            "offset_columns": ["kafka_partition", "kafka_offset"]
+          },
+          "column_mapping": {
+            "claim_id":            {"source_col": "claim_id",           "transform": null},
+            "policy_id":           {"source_col": "policy_id",          "transform": null},
+            "customer_id":         {"source_col": "customer_id",        "transform": null},
+            "claim_type":          {"source_col": "claim_type",         "transform": null},
+            "claim_amount":        {"source_col": "claim_amount",       "transform": null},
+            "claim_status":        {"source_col": "claim_status",       "transform": null},
+            "filed_date":          {"source_col": "filed_date",         "transform": null},
+            "processed_date":      {"source_col": "processed_date",     "transform": null},
+            "adjuster_id":         {"source_col": "adjuster_id",        "transform": null},
+            "description":         {"source_col": "description",        "transform": null},
+            "is_deleted":          {"source_col": "is_deleted",         "transform": null},
+            "event_timestamp":     {"source_col": "event_timestamp",    "transform": null},
+            "ingestion_timestamp": {"source_col": "ingestion_timestamp","transform": null},
+            "source_system":       {"source_col": null,                 "transform": null, "default": "kafka_claims"}
+          }
+        }
+      },
+
+      "schema": {
+        "claim_id":            {"dtype": "STRING",       "nullable": false, "description": "Unique claim identifier"},
+        "policy_id":           {"dtype": "STRING",       "nullable": true,  "description": "Associated policy ID"},
+        "customer_id":         {"dtype": "STRING",       "nullable": true,  "description": "Customer who filed the claim"},
+        "claim_type":          {"dtype": "STRING",       "nullable": true,  "description": "Type of claim (medical, property, auto, etc.)"},
+        "claim_amount":        {"dtype": "DECIMAL(12,2)","nullable": true,  "description": "Claim amount in dollars"},
+        "claim_status":        {"dtype": "STRING",       "nullable": true,  "description": "Status (filed, processing, approved, denied, paid)"},
+        "filed_date":          {"dtype": "DATE",         "nullable": true,  "description": "Date claim was filed"},
+        "processed_date":      {"dtype": "DATE",         "nullable": true,  "description": "Date claim was processed"},
+        "adjuster_id":         {"dtype": "STRING",       "nullable": true,  "description": "Assigned claims adjuster"},
+        "description":         {"dtype": "STRING",       "nullable": true,  "description": "Claim description"},
+        "is_deleted":          {"dtype": "BOOLEAN",      "nullable": false, "description": "Soft delete flag for CDC"},
+        "event_timestamp":     {"dtype": "TIMESTAMP",    "nullable": false, "description": "Event timestamp for SCD2 sequencing"},
+        "ingestion_timestamp": {"dtype": "TIMESTAMP",    "nullable": true,  "description": "When record was ingested"},
+        "source_system":       {"dtype": "STRING",       "nullable": false, "description": "Origin system (legacy_claims, kafka_claims)"}
+      }
+    }
+  ]
+}

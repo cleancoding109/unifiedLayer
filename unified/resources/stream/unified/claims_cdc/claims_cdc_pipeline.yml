@@ -1,0 +1,21 @@
+# Claims CDC Pipeline for unified claims SCD Type 2
+resources:
+  pipelines:
+    claims_cdc_pipeline:
+      name: unified_claims_cdc_scd2_pipeline
+      catalog: ${var.catalog}
+      schema: ${var.schema}
+      serverless: true
+      libraries:
+        - notebook:
+            path: ../../../../src/pipeline.py
+
+      configuration:
+        bundle.sourcePath: ${workspace.file_path}/src
+        # Pass variables to pipeline for use in code
+        pipeline.catalog: ${var.catalog}
+        pipeline.schema: ${var.schema}
+        pipeline.source_catalog: ${var.source_catalog}
+        pipeline.source_schema: ${var.source_schema}
+        # Relative path to metadata JSON from src/metadata folder
+        pipeline.metadata_path: stream/unified/claims_cdc/claims_cdc_pipeline.json

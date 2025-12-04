@@ -1,0 +1,33 @@
+# Claims CDC Job for unified claims SCD Type 2 pipeline
+resources:
+  jobs:
+    claims_cdc_job:
+      name: unified_claims_cdc_scd2_job
+
+      trigger:
+        # Run this job every day
+        periodic:
+          interval: 1
+          unit: DAYS
+
+      parameters:
+        - name: catalog
+          default: ${var.catalog}
+        - name: schema
+          default: ${var.schema}
+        - name: source_catalog
+          default: ${var.source_catalog}
+        - name: source_schema
+          default: ${var.source_schema}
+
+      tasks:
+        - task_key: refresh_pipeline
+          pipeline_task:
+            pipeline_id: ${resources.pipelines.claims_cdc_pipeline.id}
+
+      environments:
+        - environment_key: default
+          spec:
+            environment_version: "2"
+            dependencies:
+              - ../../../../dist/*.whl
