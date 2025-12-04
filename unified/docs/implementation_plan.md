@@ -49,6 +49,25 @@ to merge multiple source paths into unified streaming tables with automatic hist
 | underwriting_pipeline deployed and running | ✅ |
 | All CDC flows completing successfully | ✅ |
 
+### Phase 5: Multi-Target Support ✅ COMPLETE
+
+| Task | Status |
+|------|--------|
+| Updated pipeline.py to loop through all targets | ✅ |
+| Updated views.py for multi-target view generation | ✅ |
+| pega_workflow_pipeline (3 targets from 2 sources) | ✅ |
+| Backward compatibility with single-target pipelines | ✅ |
+
+### Phase 6: Mapper/Transforms Refactoring ✅ COMPLETE
+
+| Task | Status |
+|------|--------|
+| Created mapper.py with apply_mapping() | ✅ |
+| Refactored transformations.py with registry pattern | ✅ |
+| Added epoch_to_timestamp transforms | ✅ |
+| Updated views.py for sequential mapping → transforms | ✅ |
+| All pipelines verified working | ✅ |
+
 ---
 
 ## Current Pipelines
@@ -71,6 +90,15 @@ to merge multiple source paths into unified streaming tables with automatic hist
 | **Pattern** | Many-to-One (workflow events) |
 | **Status** | ✅ Running |
 
+### pega_workflow_pipeline (Multi-Target Example)
+
+| Property | Value |
+|----------|-------|
+| **Sources** | pega_event_stream, pega_bix_history |
+| **Targets** | pega_underwriting_scd2, pega_claims_scd2, pega_service_scd2 |
+| **Pattern** | Many-to-Many (multiple targets from shared sources) |
+| **Status** | ✅ Running |
+
 ---
 
 ## File Structure
@@ -85,33 +113,36 @@ unified/
 │   └── implementation_plan.md           # This file
 ├── src/
 │   ├── metadata/
-│   │   ├── stream/unified/
-│   │   │   ├── customer_cdc/
-│   │   │   │   └── customer_cdc_pipeline.json
-│   │   │   └── underwriting_event/
-│   │   │       └── underwriting_event_pipeline.json
-│   │   └── test/
-│   │       └── test_pipeline.json
+│   │   └── stream/unified/{domain}/
+│   │       └── {domain}_pipeline.json   # Per-domain metadata
+│   ├── mapper.py                        # Column mapping (rename, defaults)
 │   ├── metadata_loader.py               # Metadata loading & accessor functions
-│   ├── transformations.py               # Schema mapping transformations
+│   ├── transformations.py               # Type conversions (registry pattern)
 │   ├── views.py                         # Dynamic view generation
-│   ├── pipeline.py                      # Main orchestration
-│   ├── test_pipeline.py                 # Test pipeline notebook
-│   └── data_setup/                      # Test data scripts
+│   ├── pipeline.py                      # Main orchestration (multi-target)
+│   └── test_pipeline.py                 # Test pipeline notebook
 ├── resources/
-│   ├── stream/unified/
-│   │   ├── customer_cdc/
-│   │   │   ├── customer_cdc_pipeline.yml
-│   │   │   └── customer_cdc_job.yml
-│   │   └── underwriting_event/
-│   │       ├── underwriting_event_pipeline.yml
-│   │       └── underwriting_event_job.yml
-│   └── test/
-│       ├── test_metadata.pipeline.yml
-│       └── *.job.yml
+│   └── stream/unified/{domain}/
+│       ├── {domain}_pipeline.yml        # Pipeline resource
+│       └── {domain}_job.yml             # Job resource
 └── tests/
     ├── conftest.py
     └── main_test.py
+```
+
+### Module Pipeline Flow
+
+```
+Source Table
+     │
+     ▼
+mapper.apply_mapping()      # Rename columns, apply defaults
+     │
+     ▼
+transformations.apply_transforms()   # Type conversions
+     │
+     ▼
+Lakeflow View → CDC Flow → Target
 ```
 
 ---
@@ -286,11 +317,20 @@ targets:
 
 ---
 
+## Completed Enhancements
+
+| Enhancement | Status | Description |
+|-------------|--------|-------------|
+| Multi-target support | ✅ DONE | Single pipeline writing to multiple targets |
+| Mapper/Transforms refactoring | ✅ DONE | Sequential apply_mapping → apply_transforms |
+| Epoch to timestamp | ✅ DONE | Convert epoch ms/s to TIMESTAMP |
+| Transform registry | ✅ DONE | Extensible pattern for adding new transforms |
+
 ## Next Steps (Future Enhancements)
 
 | Enhancement | Priority | Description |
 |-------------|----------|-------------|
-| Multi-target support | Medium | Single pipeline writing to multiple targets |
-| Data quality rules | Medium | Add validation in transformations |
+| Data quality rules | Medium | Add validation step in pipeline |
 | Schema evolution | Low | Handle source schema changes gracefully |
 | Monitoring dashboard | Low | Pipeline health and metrics |
+| Custom transform support | Low | User-defined transforms from metadata |

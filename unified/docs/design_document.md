@@ -201,13 +201,34 @@ resources/
 ### 4.2 Module Responsibilities
 
 | Module | Purpose |
-|--------|---------|
+|--------|----------|
 | `metadata_loader.py` | Load JSON, inject catalog/schema from Spark config, provide accessor functions |
-| `transformations.py` | `apply_schema_mapping()` - column renaming, type conversion |
-| `views.py` | Create Lakeflow views for each enabled source mapping |
-| `pipeline.py` | Create streaming table and CDC flows |
+| `mapper.py` | `apply_mapping()` - column renaming, default values (no type changes) |
+| `transformations.py` | `apply_transforms()` - type conversions using registry pattern |
+| `views.py` | Create Lakeflow views, orchestrate mapping → transforms pipeline |
+| `pipeline.py` | Create streaming tables and CDC flows for all targets |
 
-### 4.3 Accessor Functions
+### 4.3 Pipeline Flow
+
+```
+Source Table
+     │
+     ▼
+mapper.apply_mapping(df, column_mapping)
+  ├── Rename source columns to target names
+  ├── Apply default values for missing columns
+  └── Preserve original data types
+     │
+     ▼
+transformations.apply_transforms(df, column_mapping)
+  ├── Apply registered transforms (to_date, epoch_to_timestamp, etc.)
+  └── Cast all columns to target data types
+     │
+     ▼
+Lakeflow View → CDC Flow → Target Streaming Table
+```
+
+### 4.4 Accessor Functions
 
 ```python
 # Target accessors (support multiple targets)
@@ -334,17 +355,36 @@ Columns in `track_history_except_columns` are updated in-place (SCD Type 1 behav
 }
 ```
 
-### 7.2 Supported Transforms
+### 7.2 Transform Registry
+
+Transforms are implemented using a registry pattern for easy extensibility:
+
+```python
+TRANSFORM_REGISTRY = {
+    "to_date": _parse_date,
+    "to_timestamp": _parse_timestamp,
+    "epoch_to_timestamp": _epoch_to_timestamp_ms,
+    "epoch_to_timestamp_ms": _epoch_to_timestamp_ms,
+    "epoch_to_timestamp_s": _epoch_to_timestamp_s,
+    "cast_string": lambda c: c.cast("STRING"),
+    "cast_int": lambda c: c.cast("INT"),
+    "cast_long": lambda c: c.cast("LONG"),
+    "cast_boolean": _normalize_boolean,
+}
+```
 
 | Transform | Description |
 |-----------|-------------|
 | `null` | No transformation (direct mapping) |
-| `to_date` | Parse string to DATE |
-| `to_timestamp` | Parse string to TIMESTAMP |
+| `to_date` | Parse multiple date string formats (ISO, US, legacy) |
+| `to_timestamp` | Parse multiple timestamp formats |
+| `epoch_to_timestamp` | Convert epoch milliseconds to TIMESTAMP (default) |
+| `epoch_to_timestamp_ms` | Convert epoch milliseconds to TIMESTAMP (explicit) |
+| `epoch_to_timestamp_s` | Convert epoch seconds to TIMESTAMP |
 | `cast_string` | Cast to STRING |
 | `cast_int` | Cast to INT |
 | `cast_long` | Cast to LONG |
-| `cast_boolean` | Normalize boolean values |
+| `cast_boolean` | Normalize boolean values (TRUE/1/Y/YES → true) |
 
 ### 7.3 Default Values
 

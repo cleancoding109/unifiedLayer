@@ -1,0 +1,272 @@
+{
+  "pipeline": {
+    "name": "pega_workflow_multi_target_pipeline",
+    "version": "2.0.0",
+    "description": "Multi-target Pega pipeline - One pipeline writes to multiple unified SCD2 tables (underwriting, claims, service)"
+  },
+
+  "sources": {
+    "pega_event_stream": {
+      "enabled": true,
+      "table_name": "rdl_pega_uw_events_st",
+      "description": "Pega workflow event stream - real-time events from Kafka",
+      "source_system_value": "pega_stream",
+      "exclude_columns": []
+    },
+    "pega_bix_history": {
+      "enabled": true,
+      "table_name": "rdl_pega_uw_bix_hist_st",
+      "description": "Pega BIX workflow history - historical data with SCD dates",
+      "source_system_value": "pega_bix",
+      "exclude_columns": ["is_current"]
+    }
+  },
+
+  "targets": [
+    {
+      "name": "pega_underwriting_scd2",
+      "enabled": true,
+      "comment": "Unified SCD Type 2 - Pega underwriting workflow events",
+      "scd_type": 2,
+      "keys": ["case_id"],
+      "sequence_by": "event_timestamp",
+      "delete_condition": "is_deleted = true",
+      "except_columns": [],
+      "track_history_except_columns": ["source_system", "ingestion_timestamp", "source_record_start_dt", "source_record_end_dt"],
+
+      "source_mappings": {
+        "pega_event_stream": {
+          "enabled": true,
+          "view_name": "pega_uw_multi_stream_v",
+          "flow_name": "pega_multi_stream_to_uw_flow",
+          "column_mapping": {
+            "case_id":                {"source_col": "case_id",             "transform": null},
+            "workflow_type":          {"source_col": "workflow_type",       "transform": null},
+            "step_name":              {"source_col": "step_name",           "transform": null},
+            "step_status":            {"source_col": "step_status",         "transform": null},
+            "assigned_to":            {"source_col": "assigned_to",         "transform": null},
+            "applicant_id":           {"source_col": "applicant_id",        "transform": null},
+            "policy_number":          {"source_col": "policy_number",       "transform": null},
+            "decision":               {"source_col": "decision",            "transform": null},
+            "decision_reason":        {"source_col": "decision_reason",     "transform": null},
+            "risk_score":             {"source_col": "risk_score",          "transform": null},
+            "premium_amount":         {"source_col": "premium_amount",      "transform": null},
+            "is_deleted":             {"source_col": "is_deleted",          "transform": null},
+            "event_timestamp":        {"source_col": "event_timestamp",     "transform": null},
+            "ingestion_timestamp":    {"source_col": "ingestion_timestamp", "transform": null},
+            "source_system":          {"source_col": null,                  "transform": null, "default": "pega_stream"},
+            "source_record_start_dt": {"source_col": null,                  "transform": null, "default": null},
+            "source_record_end_dt":   {"source_col": null,                  "transform": null, "default": null}
+          }
+        },
+        "pega_bix_history": {
+          "enabled": true,
+          "view_name": "pega_uw_multi_bix_v",
+          "flow_name": "pega_multi_bix_to_uw_flow",
+          "column_mapping": {
+            "case_id":                {"source_col": "case_id",             "transform": null},
+            "workflow_type":          {"source_col": "workflow_type",       "transform": null},
+            "step_name":              {"source_col": "step_name",           "transform": null},
+            "step_status":            {"source_col": "step_status",         "transform": null},
+            "assigned_to":            {"source_col": "assigned_to",         "transform": null},
+            "applicant_id":           {"source_col": "applicant_id",        "transform": null},
+            "policy_number":          {"source_col": "policy_number",       "transform": null},
+            "decision":               {"source_col": "decision",            "transform": null},
+            "decision_reason":        {"source_col": "decision_reason",     "transform": null},
+            "risk_score":             {"source_col": "risk_score",          "transform": null},
+            "premium_amount":         {"source_col": "premium_amount",      "transform": null},
+            "is_deleted":             {"source_col": "is_deleted",          "transform": null},
+            "event_timestamp":        {"source_col": "event_timestamp",     "transform": null},
+            "ingestion_timestamp":    {"source_col": "ingestion_timestamp", "transform": null},
+            "source_system":          {"source_col": null,                  "transform": null, "default": "pega_bix"},
+            "source_record_start_dt": {"source_col": "valid_from",          "transform": null},
+            "source_record_end_dt":   {"source_col": "valid_to",            "transform": null}
+          }
+        }
+      },
+
+      "schema": {
+        "case_id":                {"dtype": "STRING",    "nullable": false, "description": "Unique workflow case identifier"},
+        "workflow_type":          {"dtype": "STRING",    "nullable": true,  "description": "Type of workflow"},
+        "step_name":              {"dtype": "STRING",    "nullable": true,  "description": "Current workflow step name"},
+        "step_status":            {"dtype": "STRING",    "nullable": true,  "description": "Step status"},
+        "assigned_to":            {"dtype": "STRING",    "nullable": true,  "description": "User/team assigned"},
+        "applicant_id":           {"dtype": "STRING",    "nullable": true,  "description": "Applicant identifier"},
+        "policy_number":          {"dtype": "STRING",    "nullable": true,  "description": "Associated policy number"},
+        "decision":               {"dtype": "STRING",    "nullable": true,  "description": "Underwriting decision"},
+        "decision_reason":        {"dtype": "STRING",    "nullable": true,  "description": "Reason for decision"},
+        "risk_score":             {"dtype": "INT",       "nullable": true,  "description": "Calculated risk score"},
+        "premium_amount":         {"dtype": "DECIMAL(10,2)", "nullable": true, "description": "Calculated premium amount"},
+        "is_deleted":             {"dtype": "BOOLEAN",   "nullable": false, "description": "Soft delete flag"},
+        "event_timestamp":        {"dtype": "TIMESTAMP", "nullable": false, "description": "Event timestamp for SCD2 sequencing"},
+        "ingestion_timestamp":    {"dtype": "TIMESTAMP", "nullable": true,  "description": "When record was ingested"},
+        "source_system":          {"dtype": "STRING",    "nullable": false, "description": "Origin system"},
+        "source_record_start_dt": {"dtype": "TIMESTAMP", "nullable": true,  "description": "Original SCD start date from BIX"},
+        "source_record_end_dt":   {"dtype": "TIMESTAMP", "nullable": true,  "description": "Original SCD end date from BIX"}
+      }
+    },
+
+    {
+      "name": "unified_claims_scd2",
+      "enabled": true,
+      "comment": "Unified SCD Type 2 - Pega claims workflow events",
+      "scd_type": 2,
+      "keys": ["claim_id"],
+      "sequence_by": "event_timestamp",
+      "delete_condition": "is_deleted = true",
+      "except_columns": [],
+      "track_history_except_columns": ["source_system", "ingestion_timestamp", "source_record_start_dt", "source_record_end_dt"],
+
+      "source_mappings": {
+        "pega_event_stream": {
+          "enabled": true,
+          "view_name": "pega_claims_stream_v",
+          "flow_name": "pega_stream_to_claims_flow",
+          "column_mapping": {
+            "claim_id":               {"source_col": "case_id",             "transform": null},
+            "claim_type":             {"source_col": "workflow_type",       "transform": null},
+            "step_name":              {"source_col": "step_name",           "transform": null},
+            "step_status":            {"source_col": "step_status",         "transform": null},
+            "adjuster_id":            {"source_col": "assigned_to",         "transform": null},
+            "claimant_id":            {"source_col": "applicant_id",        "transform": null},
+            "policy_number":          {"source_col": "policy_number",       "transform": null},
+            "claim_decision":         {"source_col": "decision",            "transform": null},
+            "denial_reason":          {"source_col": "decision_reason",     "transform": null},
+            "claim_amount":           {"source_col": "premium_amount",      "transform": null},
+            "approved_amount":        {"source_col": null,                  "transform": null, "default": null},
+            "is_deleted":             {"source_col": "is_deleted",          "transform": null},
+            "event_timestamp":        {"source_col": "event_timestamp",     "transform": null},
+            "ingestion_timestamp":    {"source_col": "ingestion_timestamp", "transform": null},
+            "source_system":          {"source_col": null,                  "transform": null, "default": "pega_stream"},
+            "source_record_start_dt": {"source_col": null,                  "transform": null, "default": null},
+            "source_record_end_dt":   {"source_col": null,                  "transform": null, "default": null}
+          }
+        },
+        "pega_bix_history": {
+          "enabled": true,
+          "view_name": "pega_claims_bix_v",
+          "flow_name": "pega_bix_to_claims_flow",
+          "column_mapping": {
+            "claim_id":               {"source_col": "case_id",             "transform": null},
+            "claim_type":             {"source_col": "workflow_type",       "transform": null},
+            "step_name":              {"source_col": "step_name",           "transform": null},
+            "step_status":            {"source_col": "step_status",         "transform": null},
+            "adjuster_id":            {"source_col": "assigned_to",         "transform": null},
+            "claimant_id":            {"source_col": "applicant_id",        "transform": null},
+            "policy_number":          {"source_col": "policy_number",       "transform": null},
+            "claim_decision":         {"source_col": "decision",            "transform": null},
+            "denial_reason":          {"source_col": "decision_reason",     "transform": null},
+            "claim_amount":           {"source_col": "premium_amount",      "transform": null},
+            "approved_amount":        {"source_col": null,                  "transform": null, "default": null},
+            "is_deleted":             {"source_col": "is_deleted",          "transform": null},
+            "event_timestamp":        {"source_col": "event_timestamp",     "transform": null},
+            "ingestion_timestamp":    {"source_col": "ingestion_timestamp", "transform": null},
+            "source_system":          {"source_col": null,                  "transform": null, "default": "pega_bix"},
+            "source_record_start_dt": {"source_col": "valid_from",          "transform": null},
+            "source_record_end_dt":   {"source_col": "valid_to",            "transform": null}
+          }
+        }
+      },
+
+      "schema": {
+        "claim_id":               {"dtype": "STRING",    "nullable": false, "description": "Unique claim identifier"},
+        "claim_type":             {"dtype": "STRING",    "nullable": true,  "description": "Type of claim"},
+        "step_name":              {"dtype": "STRING",    "nullable": true,  "description": "Current workflow step name"},
+        "step_status":            {"dtype": "STRING",    "nullable": true,  "description": "Step status"},
+        "adjuster_id":            {"dtype": "STRING",    "nullable": true,  "description": "Claims adjuster assigned"},
+        "claimant_id":            {"dtype": "STRING",    "nullable": true,  "description": "Claimant identifier"},
+        "policy_number":          {"dtype": "STRING",    "nullable": true,  "description": "Associated policy number"},
+        "claim_decision":         {"dtype": "STRING",    "nullable": true,  "description": "Claim decision"},
+        "denial_reason":          {"dtype": "STRING",    "nullable": true,  "description": "Reason for denial if applicable"},
+        "claim_amount":           {"dtype": "DECIMAL(10,2)", "nullable": true, "description": "Claimed amount"},
+        "approved_amount":        {"dtype": "DECIMAL(10,2)", "nullable": true, "description": "Approved amount"},
+        "is_deleted":             {"dtype": "BOOLEAN",   "nullable": false, "description": "Soft delete flag"},
+        "event_timestamp":        {"dtype": "TIMESTAMP", "nullable": false, "description": "Event timestamp for SCD2 sequencing"},
+        "ingestion_timestamp":    {"dtype": "TIMESTAMP", "nullable": true,  "description": "When record was ingested"},
+        "source_system":          {"dtype": "STRING",    "nullable": false, "description": "Origin system"},
+        "source_record_start_dt": {"dtype": "TIMESTAMP", "nullable": true,  "description": "Original SCD start date from BIX"},
+        "source_record_end_dt":   {"dtype": "TIMESTAMP", "nullable": true,  "description": "Original SCD end date from BIX"}
+      }
+    },
+
+    {
+      "name": "unified_service_scd2",
+      "enabled": true,
+      "comment": "Unified SCD Type 2 - Pega customer service workflow events",
+      "scd_type": 2,
+      "keys": ["service_request_id"],
+      "sequence_by": "event_timestamp",
+      "delete_condition": "is_deleted = true",
+      "except_columns": [],
+      "track_history_except_columns": ["source_system", "ingestion_timestamp", "source_record_start_dt", "source_record_end_dt"],
+
+      "source_mappings": {
+        "pega_event_stream": {
+          "enabled": true,
+          "view_name": "pega_service_stream_v",
+          "flow_name": "pega_stream_to_service_flow",
+          "column_mapping": {
+            "service_request_id":     {"source_col": "case_id",             "transform": null},
+            "request_type":           {"source_col": "workflow_type",       "transform": null},
+            "step_name":              {"source_col": "step_name",           "transform": null},
+            "step_status":            {"source_col": "step_status",         "transform": null},
+            "agent_id":               {"source_col": "assigned_to",         "transform": null},
+            "customer_id":            {"source_col": "applicant_id",        "transform": null},
+            "policy_number":          {"source_col": "policy_number",       "transform": null},
+            "resolution":             {"source_col": "decision",            "transform": null},
+            "resolution_notes":       {"source_col": "decision_reason",     "transform": null},
+            "priority":               {"source_col": "risk_score",          "transform": null},
+            "is_deleted":             {"source_col": "is_deleted",          "transform": null},
+            "event_timestamp":        {"source_col": "event_timestamp",     "transform": null},
+            "ingestion_timestamp":    {"source_col": "ingestion_timestamp", "transform": null},
+            "source_system":          {"source_col": null,                  "transform": null, "default": "pega_stream"},
+            "source_record_start_dt": {"source_col": null,                  "transform": null, "default": null},
+            "source_record_end_dt":   {"source_col": null,                  "transform": null, "default": null}
+          }
+        },
+        "pega_bix_history": {
+          "enabled": true,
+          "view_name": "pega_service_bix_v",
+          "flow_name": "pega_bix_to_service_flow",
+          "column_mapping": {
+            "service_request_id":     {"source_col": "case_id",             "transform": null},
+            "request_type":           {"source_col": "workflow_type",       "transform": null},
+            "step_name":              {"source_col": "step_name",           "transform": null},
+            "step_status":            {"source_col": "step_status",         "transform": null},
+            "agent_id":               {"source_col": "assigned_to",         "transform": null},
+            "customer_id":            {"source_col": "applicant_id",        "transform": null},
+            "policy_number":          {"source_col": "policy_number",       "transform": null},
+            "resolution":             {"source_col": "decision",            "transform": null},
+            "resolution_notes":       {"source_col": "decision_reason",     "transform": null},
+            "priority":               {"source_col": "risk_score",          "transform": null},
+            "is_deleted":             {"source_col": "is_deleted",          "transform": null},
+            "event_timestamp":        {"source_col": "event_timestamp",     "transform": null},
+            "ingestion_timestamp":    {"source_col": "ingestion_timestamp", "transform": null},
+            "source_system":          {"source_col": null,                  "transform": null, "default": "pega_bix"},
+            "source_record_start_dt": {"source_col": "valid_from",          "transform": null},
+            "source_record_end_dt":   {"source_col": "valid_to",            "transform": null}
+          }
+        }
+      },
+
+      "schema": {
+        "service_request_id":     {"dtype": "STRING",    "nullable": false, "description": "Unique service request identifier"},
+        "request_type":           {"dtype": "STRING",    "nullable": true,  "description": "Type of service request"},
+        "step_name":              {"dtype": "STRING",    "nullable": true,  "description": "Current workflow step name"},
+        "step_status":            {"dtype": "STRING",    "nullable": true,  "description": "Step status"},
+        "agent_id":               {"dtype": "STRING",    "nullable": true,  "description": "Service agent assigned"},
+        "customer_id":            {"dtype": "STRING",    "nullable": true,  "description": "Customer identifier"},
+        "policy_number":          {"dtype": "STRING",    "nullable": true,  "description": "Associated policy number"},
+        "resolution":             {"dtype": "STRING",    "nullable": true,  "description": "Resolution status"},
+        "resolution_notes":       {"dtype": "STRING",    "nullable": true,  "description": "Resolution details"},
+        "priority":               {"dtype": "INT",       "nullable": true,  "description": "Request priority"},
+        "is_deleted":             {"dtype": "BOOLEAN",   "nullable": false, "description": "Soft delete flag"},
+        "event_timestamp":        {"dtype": "TIMESTAMP", "nullable": false, "description": "Event timestamp for SCD2 sequencing"},
+        "ingestion_timestamp":    {"dtype": "TIMESTAMP", "nullable": true,  "description": "When record was ingested"},
+        "source_system":          {"dtype": "STRING",    "nullable": false, "description": "Origin system"},
+        "source_record_start_dt": {"dtype": "TIMESTAMP", "nullable": true,  "description": "Original SCD start date from BIX"},
+        "source_record_end_dt":   {"dtype": "TIMESTAMP", "nullable": true,  "description": "Original SCD end date from BIX"}
+      }
+    }
+  ]
+}

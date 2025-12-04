@@ -1,28 +1,34 @@
-# Unified SCD Type 2 Pipeline
+# Unified SCD Type 2 Pipeline Framework
 
-A Databricks Lakeflow pipeline that merges 3 source paths for the **same Customer entity** into a single **SCD Type 2 streaming table**.
+A **metadata-driven** Databricks Lakeflow pipeline framework that merges multiple source paths into unified **SCD Type 2 streaming tables**.
 
 ## Overview
 
-This pipeline implements **Stream 3 (Unification Layer)** of the data architecture:
+This framework implements a flexible **Unification Layer** supporting:
+- **Many-to-One Pattern**: Multiple sources → Single unified target (e.g., CDC consolidation)
+- **Many-to-Many Pattern**: Multiple sources → Multiple targets (e.g., workflow events)
 
 ```
-Source Tables (ltc_insurance.raw_data_layer)
-├── rdl_customer_hist_st    → Greenplum legacy history (oldest data)
-├── rdl_customer_init_st    → SQL Server initial snapshot (baseline)
-└── rdl_customer            → Kafka CDC stream (real-time changes)
-                ↓
-        3 x CDC Flows
-                ↓
-Target Table (ltc_insurance.unified_dev)
-└── unified_customer_scd2   → Complete SCD2 history
+Source Tables (Bronze/Raw Layer)
+├── Source A    → Historical data
+├── Source B    → Initial snapshot
+└── Source C    → Real-time CDC stream
+        ↓
+    apply_mapping()     # Column renaming, defaults
+        ↓
+    apply_transforms()  # Type conversions
+        ↓
+    CDC Flows (per source)
+        ↓
+Target Tables (Unified Layer)
+└── unified_entity_scd2   → Complete SCD2 history
 ```
 
 ## Architecture
 
 ### Why Multiple CDC Flows?
 
-Per Databricks documentation, we use **3 separate `create_auto_cdc_flow()` calls** instead of `unionByName()`:
+Per Databricks documentation, we use **separate `create_auto_cdc_flow()` calls** per source:
 
 | Aspect | Union Approach | Multiple CDC Flows |
 |--------|---------------|-------------------|
@@ -30,22 +36,39 @@ Per Databricks documentation, we use **3 separate `create_auto_cdc_flow()` calls
 | Checkpoints | Single checkpoint | Independent per flow |
 | Failure isolation | All or nothing | Source-specific |
 
-### SCD Type 2 Configuration
+### Pipeline Flow
 
-- **Primary Key:** `customer_id`
-- **Sequence By:** `event_timestamp`
-- **Delete Detection:** `is_deleted = true`
-- **Auto-managed columns:** `__START_AT`, `__END_AT`
+```
+Source Table → mapper.apply_mapping() → transformations.apply_transforms() → View → CDC Flow → Target
+               (rename columns)         (type conversions)                      
+               (set defaults)           (epoch→timestamp, etc.)
+```
+
+### SCD Type 2 Features
+
+- **Primary Keys**: Configurable per target
+- **Sequence By**: Any timestamp column for ordering
+- **Delete Detection**: Configurable condition expression
+- **Track History Except**: Columns updated without new version
+- **Auto-managed columns**: `__START_AT`, `__END_AT`
 
 ## Project Structure
 
 ```
 unified/
 ├── src/
-│   └── pipeline.py              # Main Lakeflow pipeline (Steps 1-4)
+│   ├── metadata/
+│   │   └── stream/unified/{domain}/
+│   │       └── {domain}_pipeline.json   # Metadata configuration
+│   ├── mapper.py                # Column mapping (rename, defaults)
+│   ├── transformations.py       # Type conversions (registry pattern)
+│   ├── metadata_loader.py       # Load & inject runtime config
+│   ├── views.py                 # Dynamic view generation
+│   └── pipeline.py              # Main orchestration
 ├── resources/
-│   ├── unified.pipeline.yml     # Pipeline resource definition
-│   └── unified.job.yml          # Job resource definition
+│   └── stream/unified/{domain}/
+│       ├── {domain}_pipeline.yml  # Pipeline resource
+│       └── {domain}_job.yml       # Job resource
 ├── docs/
 │   ├── design_document.md       # Technical design
 │   └── implementation_plan.md   # Implementation phases
@@ -58,17 +81,23 @@ unified/
 ### Prerequisites
 
 - Databricks CLI configured with workspace access
-- Access to `ltc_insurance` catalog
-- Source tables exist in `raw_data_layer` schema
+- Access to target Unity Catalog
+- Source tables exist in raw data layer schema
 
 ### Deploy & Run
 
 ```bash
+# Validate bundle configuration
+databricks bundle validate
+
 # Deploy to dev environment
 databricks bundle deploy --target dev
 
-# Run the pipeline
-databricks bundle run unified_pipeline
+# Run a specific pipeline
+databricks bundle run {domain}_pipeline --refresh-all
+
+# List available pipelines
+databricks bundle summary
 ```
 
 ### Verify Results
@@ -79,47 +108,53 @@ SELECT
     source_system,
     COUNT(*) as total_records,
     SUM(CASE WHEN __END_AT IS NULL THEN 1 ELSE 0 END) as current_records
-FROM ltc_insurance.unified_dev.unified_customer_scd2
+FROM {catalog}.{schema}.unified_{entity}_scd2
 GROUP BY source_system
 ```
 
-## Pipeline Details
+## Module Architecture
 
-### Source Views
+### Core Modules
 
-| View | Source Table | Transformation |
-|------|--------------|----------------|
-| `gp_customer_v` | `rdl_customer_hist_st` | Excludes legacy SCD2 columns |
-| `sql_customer_v` | `rdl_customer_init_st` | Passthrough |
-| `cdc_customer_v` | `rdl_customer` | Adds `source_system` literal |
+| Module | Responsibility |
+|--------|----------------|
+| `mapper.py` | Column renaming, default values (no type changes) |
+| `transformations.py` | Type conversions using registry pattern |
+| `metadata_loader.py` | Load JSON config, inject runtime variables |
+| `views.py` | Create Lakeflow views for each source |
+| `pipeline.py` | Create streaming tables and CDC flows |
 
-### CDC Flows
+### Transform Registry
 
-| Flow | Source View | Target |
-|------|-------------|--------|
-| `gp_to_unified_flow` | `gp_customer_v` | `unified_customer_scd2` |
-| `sql_to_unified_flow` | `sql_customer_v` | `unified_customer_scd2` |
-| `cdc_to_unified_flow` | `cdc_customer_v` | `unified_customer_scd2` |
+| Transform | Description |
+|-----------|-------------|
+| `to_date` | Parse multiple date string formats |
+| `to_timestamp` | Parse multiple timestamp formats |
+| `epoch_to_timestamp` | Convert epoch milliseconds to TIMESTAMP |
+| `epoch_to_timestamp_ms` | Explicit milliseconds conversion |
+| `epoch_to_timestamp_s` | Explicit seconds conversion |
+| `cast_string` | Cast to STRING |
+| `cast_int` | Cast to INT |
+| `cast_long` | Cast to LONG |
+| `cast_boolean` | Normalize boolean values (Y/N, 1/0, etc.) |
 
-### Target Table Schema
+### Target Table Auto-Managed Columns
 
-| Column | Type | SCD2 Role |
-|--------|------|-----------|
-| `customer_id` | STRING | Primary Key |
-| `customer_name` | STRING | Tracked |
-| `date_of_birth` | DATE | Tracked |
-| `email` | STRING | Tracked |
-| `phone` | STRING | Tracked |
-| `state` | STRING | Tracked |
-| `zip_code` | STRING | Tracked |
-| `status` | STRING | Tracked |
-| `last_login` | TIMESTAMP | Tracked |
-| `session_count` | INT | Tracked |
-| `page_views` | INT | Tracked |
-| `is_deleted` | BOOLEAN | Delete indicator |
-| `event_timestamp` | TIMESTAMP | Sequence column |
-| `__START_AT` | TIMESTAMP | Version start (auto) |
-| `__END_AT` | TIMESTAMP | Version end (auto) |
+| Column | Type | Description |
+|--------|------|-------------|
+| `__START_AT` | TIMESTAMP | Version start (auto-managed by Lakeflow) |
+| `__END_AT` | TIMESTAMP | Version end - NULL = current (auto-managed) |
+
+## Adding New Pipelines
+
+1. **Create metadata folder**: `src/metadata/stream/unified/{domain}/`
+2. **Create metadata JSON**: `{domain}_pipeline.json`
+3. **Create resources folder**: `resources/stream/unified/{domain}/`
+4. **Create pipeline YAML**: `{domain}_pipeline.yml`
+5. **Create job YAML**: `{domain}_job.yml`
+6. **Update databricks.yml**: Add include pattern
+
+See [Implementation Plan](docs/implementation_plan.md) for detailed steps.
 
 ## Development
 
@@ -135,10 +170,21 @@ uv run pytest
 
 ### Deployment Targets
 
-| Target | Catalog | Schema | Mode |
-|--------|---------|--------|------|
-| `dev` | `ltc_insurance` | `unified_dev` | Development |
-| `prod` | `ltc_insurance` | `unified_prod` | Production |
+Configure in `databricks.yml`:
+
+```yaml
+targets:
+  dev:
+    mode: development
+    variables:
+      catalog: my_catalog
+      schema: dev_schema
+  prod:
+    mode: production
+    variables:
+      catalog: my_catalog  
+      schema: prod_schema
+```
 
 ## Documentation
 

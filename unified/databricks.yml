@@ -24,6 +24,7 @@ include:
   - "resources/test/*.yml"
   - "resources/stream/unified/customer_cdc/customer_cdc_*.yml"
   - "resources/stream/unified/underwriting_event/underwriting_event_*.yml"
+  - "resources/stream/unified/pega_workflow/pega_workflow_*.yml"
 
 targets:
   dev:

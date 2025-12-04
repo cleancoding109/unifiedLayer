@@ -1,0 +1,14 @@
+# Job for running the multi-target Pega Workflow pipeline
+resources:
+  jobs:
+    pega_workflow_job:
+      name: pega_workflow_multi_target_job
+      trigger:
+        pause_status: PAUSED
+        periodic:
+          interval: 1
+          unit: HOURS
+      tasks:
+        - task_key: refresh_pipeline
+          pipeline_task:
+            pipeline_id: ${resources.pipelines.pega_workflow_pipeline.id}

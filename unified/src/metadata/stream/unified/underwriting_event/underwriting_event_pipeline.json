@@ -112,8 +112,19 @@
           "description": "Parse string to TIMESTAMP type",
           "formats": ["yyyy-MM-dd HH:mm:ss", "yyyy-MM-dd'T'HH:mm:ss", "yyyy-MM-dd'T'HH:mm:ss.SSS", "yyyy-MM-dd'T'HH:mm:ss.SSSZ", "MM/dd/yyyy HH:mm:ss"]
         },
+        "epoch_to_timestamp": {
+          "description": "Convert epoch milliseconds to TIMESTAMP (default: ms)",
+          "variants": ["epoch_to_timestamp", "epoch_to_timestamp_ms", "epoch_to_timestamp_s"]
+        },
+        "epoch_to_timestamp_ms": {
+          "description": "Convert epoch milliseconds to TIMESTAMP (Kafka, JavaScript Date.now())"
+        },
+        "epoch_to_timestamp_s": {
+          "description": "Convert epoch seconds to TIMESTAMP (Unix timestamp, Python time.time())"
+        },
         "cast_string": {"description": "Cast to STRING type"},
         "cast_int": {"description": "Cast to INT type"},
+        "cast_long": {"description": "Cast to LONG type"},
         "cast_decimal": {"description": "Cast to DECIMAL type"},
         "cast_boolean": {
           "description": "Normalize various boolean representations",
