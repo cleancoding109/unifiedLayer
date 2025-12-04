@@ -10,7 +10,7 @@ resources:
       serverless: true
       libraries:
         - notebook:
-            path: ../../src/test_pipeline.py
+            path: ../../tests/test_metadata_notebook.py
       configuration:
         # Pipeline-specific configuration passed to notebooks via spark.conf
         pipeline.catalog: ${var.catalog}
