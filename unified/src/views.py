@@ -6,11 +6,25 @@ try:
     import mapper
     import transformations
     import dedup
+    from exceptions import (
+        ViewCreationError,
+        SourceTableNotFoundError,
+        MappingError,
+        TransformError,
+        DedupError,
+    )
 except ImportError:
     from . import metadata_loader
     from . import mapper
     from . import transformations
     from . import dedup
+    from .exceptions import (
+        ViewCreationError,
+        SourceTableNotFoundError,
+        MappingError,
+        TransformError,
+        DedupError,
+    )
 
 # COMMAND ----------
 
@@ -38,6 +52,13 @@ def _create_source_view(source_key: str, source_mapping: dict, target_index: int
         source_key: Source identifier (e.g., 'greenplum', 'kafka_cdc')
         source_mapping: Target-specific source mapping (view_name, flow_name, column_mapping)
         target_index: Target index for multi-target pipelines (default 0)
+    
+    Raises:
+        ViewCreationError: If view creation fails
+        SourceTableNotFoundError: If source table cannot be read
+        MappingError: If column mapping fails
+        TransformError: If transformation fails
+        DedupError: If deduplication fails
     """
     # Get full source config (merges shared + target-specific)
     full_config = metadata_loader.get_full_source_config(source_key, target_index)
@@ -53,26 +74,50 @@ def _create_source_view(source_key: str, source_mapping: dict, target_index: int
         # Get Spark session
         spark = SparkSession.builder.getOrCreate()
         
-        # Read from the source table
-        df = spark.readStream.table(table_fqn)
+        # Read from the source table with error handling
+        try:
+            df = spark.readStream.table(table_fqn)
+        except Exception as e:
+            raise SourceTableNotFoundError(
+                table_fqn=table_fqn,
+                source_name=source_key
+            ) from e
         
         # Get column mapping for this source/target combination
         column_mapping = metadata_loader.get_column_mapping(source_key, target_index)
         
         # Step 1: Apply mapping (rename columns, set defaults)
-        df_mapped = mapper.apply_mapping(
-            df, 
-            column_mapping, 
-            source_key,
-            target_index
-        )
+        try:
+            df_mapped = mapper.apply_mapping(
+                df, 
+                column_mapping, 
+                source_key,
+                target_index
+            )
+        except MappingError:
+            raise  # Re-raise specific mapping errors
+        except Exception as e:
+            raise ViewCreationError(
+                view_name=view_name,
+                source_name=source_key,
+                error=f"Mapping failed: {str(e)}"
+            ) from e
         
         # Step 2: Apply transforms (type conversions, epoch_to_timestamp, etc.)
-        df_transformed = transformations.apply_transforms(
-            df_mapped,
-            column_mapping,
-            target_index
-        )
+        try:
+            df_transformed = transformations.apply_transforms(
+                df_mapped,
+                column_mapping,
+                target_index
+            )
+        except TransformError:
+            raise  # Re-raise specific transform errors
+        except Exception as e:
+            raise ViewCreationError(
+                view_name=view_name,
+                source_name=source_key,
+                error=f"Transformation failed: {str(e)}"
+            ) from e
         
         # Step 3: Apply deduplication (watermark + dropDuplicates)
         # Only applied if dedup_config.enabled = true in source_mapping
@@ -81,7 +126,16 @@ def _create_source_view(source_key: str, source_mapping: dict, target_index: int
         #   - Duplicate messages from producer retries (via offset dedup)
         #   - Logical duplicates (via business key dedup)
         dedup_config = source_mapping.get("dedup_config", {})
-        df_deduped = dedup.apply_dedup(df_transformed, dedup_config)
+        try:
+            df_deduped = dedup.apply_dedup(df_transformed, dedup_config)
+        except DedupError:
+            raise  # Re-raise specific dedup errors
+        except Exception as e:
+            raise ViewCreationError(
+                view_name=view_name,
+                source_name=source_key,
+                error=f"Deduplication failed: {str(e)}"
+            ) from e
         
         return df_deduped
     

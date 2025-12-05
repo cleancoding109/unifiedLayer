@@ -81,6 +81,28 @@ to merge multiple source paths into unified streaming tables with automatic hist
 | Created step-by-step test job framework | ✅ |
 | All test steps (1-6) verified passing | ✅ |
 
+### Phase 8: Error Handling ✅ COMPLETE
+
+| Task | Status |
+|------|--------|
+| Created exceptions.py with specific exception types | ✅ |
+| Added MetadataError hierarchy (file not found, parse, validation) | ✅ |
+| Added MappingError hierarchy (column not found, invalid config) | ✅ |
+| Added TransformError hierarchy (unknown transform, execution) | ✅ |
+| Added DedupError hierarchy (invalid config, missing columns) | ✅ |
+| Added ViewCreationError and CDCFlowCreationError | ✅ |
+| Updated all modules with specific error handling | ✅ |
+
+### Phase 9: Many-to-Many Pattern Verification ✅ COMPLETE
+
+| Task | Status |
+|------|--------|
+| Verified N sources × M targets pattern works | ✅ |
+| Created multi_source_test_pipeline.json (3 sources → 2 targets) | ✅ |
+| Created test_multi_source_pattern.py test notebook | ✅ |
+| Verified unique view/flow names across all targets | ✅ |
+| Verified same source can map differently to different targets | ✅ |
+
 ---
 
 ## Current Pipelines
@@ -122,6 +144,16 @@ to merge multiple source paths into unified streaming tables with automatic hist
 | **Features** | Watermark, offset dedup, logical dedup |
 | **Status** | ✅ Running |
 
+### multi_source_test_pipeline (Many-to-Many Test)
+
+| Property | Value |
+|----------|-------|
+| **Sources** | event_stream_1, event_stream_2, history_table (3 sources) |
+| **Targets** | unified_target_a_scd2, unified_target_b_scd2 (2 targets) |
+| **Pattern** | Many-to-Many (3×2 = 6 views, 6 CDC flows) |
+| **Features** | Same source with different mappings per target |
+| **Status** | ✅ Verified |
+
 ---
 
 ## File Structure
@@ -145,11 +177,13 @@ unified/
 │   │   ├── test_claims_metadata.py
 │   │   ├── test_claims_mapper.py
 │   │   ├── test_claims_transformations.py
-│   │   └── test_claims_dedup.py
+│   │   ├── test_claims_dedup.py
+│   │   └── test_multi_source_pattern.py
 │   ├── mapper.py                        # Column mapping (rename, defaults)
 │   ├── metadata_loader.py               # Metadata loading & accessor functions
 │   ├── transformations.py               # Type conversions (registry pattern)
 │   ├── dedup.py                         # Watermark-based deduplication
+│   ├── exceptions.py                    # Custom exception classes
 │   ├── views.py                         # Dynamic view generation
 │   ├── pipeline.py                      # Main orchestration (multi-target)
 │   └── test_pipeline.py                 # Test pipeline notebook
@@ -424,6 +458,9 @@ targets:
 | Transform registry | ✅ DONE | Extensible pattern for adding new transforms |
 | Deduplication module | ✅ DONE | Watermark-based dedup for Kafka sources |
 | Step-by-step test job | ✅ DONE | Module-by-module testing framework |
+| Specific error handling | ✅ DONE | Custom exception types for all modules |
+| Many-to-many pattern | ✅ DONE | N sources × M targets with unique mappings |
+| Error handling | ✅ DONE | Specific exception types for all modules |
 
 ## Next Steps (Future Enhancements)
 

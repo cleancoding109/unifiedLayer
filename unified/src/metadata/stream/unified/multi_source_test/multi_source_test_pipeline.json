@@ -1,0 +1,156 @@
+{
+  "pipeline": {
+    "name": "multi_source_multi_target_test_pipeline",
+    "version": "2.0.0",
+    "description": "Test pipeline: 3 sources → 2 targets (many-to-many pattern verification)"
+  },
+
+  "sources": {
+    "event_stream_1": {
+      "enabled": true,
+      "table_name": "rdl_event_stream_1_st",
+      "description": "Event stream source 1 (Kafka)",
+      "source_system_value": "stream_1"
+    },
+    "event_stream_2": {
+      "enabled": true,
+      "table_name": "rdl_event_stream_2_st",
+      "description": "Event stream source 2 (Kafka)",
+      "source_system_value": "stream_2"
+    },
+    "history_table": {
+      "enabled": true,
+      "table_name": "rdl_history_table_st",
+      "description": "Historical batch data",
+      "source_system_value": "history"
+    }
+  },
+
+  "targets": [
+    {
+      "name": "unified_target_a_scd2",
+      "enabled": true,
+      "comment": "Target A - receives data from all 3 sources",
+      "keys": ["entity_id", "source_system"],
+      "sequence_by": "event_timestamp",
+      "delete_condition": "is_deleted = true",
+      "track_history_except_columns": ["source_system", "ingestion_timestamp"],
+
+      "source_mappings": {
+        "event_stream_1": {
+          "enabled": true,
+          "view_name": "stream1_to_target_a_v",
+          "flow_name": "stream1_to_target_a_flow",
+          "column_mapping": {
+            "entity_id":           {"source_col": "id",              "transform": null},
+            "entity_name":         {"source_col": "name",            "transform": null},
+            "entity_value":        {"source_col": "value",           "transform": null},
+            "event_timestamp":     {"source_col": "event_ts",        "transform": null},
+            "is_deleted":          {"source_col": "is_deleted",      "transform": null},
+            "ingestion_timestamp": {"source_col": "ingestion_ts",    "transform": null},
+            "source_system":       {"source_col": null,              "transform": null, "default": "stream_1"}
+          }
+        },
+        "event_stream_2": {
+          "enabled": true,
+          "view_name": "stream2_to_target_a_v",
+          "flow_name": "stream2_to_target_a_flow",
+          "column_mapping": {
+            "entity_id":           {"source_col": "entity_id",       "transform": null},
+            "entity_name":         {"source_col": "entity_name",     "transform": null},
+            "entity_value":        {"source_col": "entity_value",    "transform": null},
+            "event_timestamp":     {"source_col": "timestamp",       "transform": null},
+            "is_deleted":          {"source_col": "deleted",         "transform": null},
+            "ingestion_timestamp": {"source_col": "ingest_ts",       "transform": null},
+            "source_system":       {"source_col": null,              "transform": null, "default": "stream_2"}
+          }
+        },
+        "history_table": {
+          "enabled": true,
+          "view_name": "history_to_target_a_v",
+          "flow_name": "history_to_target_a_flow",
+          "column_mapping": {
+            "entity_id":           {"source_col": "hist_id",         "transform": null},
+            "entity_name":         {"source_col": "hist_name",       "transform": null},
+            "entity_value":        {"source_col": "hist_value",      "transform": null},
+            "event_timestamp":     {"source_col": "hist_timestamp",  "transform": null},
+            "is_deleted":          {"source_col": "hist_deleted",    "transform": null},
+            "ingestion_timestamp": {"source_col": "load_timestamp",  "transform": null},
+            "source_system":       {"source_col": null,              "transform": null, "default": "history"}
+          }
+        }
+      },
+
+      "schema": {
+        "entity_id":           {"dtype": "STRING",    "nullable": false},
+        "entity_name":         {"dtype": "STRING",    "nullable": true},
+        "entity_value":        {"dtype": "DECIMAL(10,2)", "nullable": true},
+        "event_timestamp":     {"dtype": "TIMESTAMP", "nullable": false},
+        "is_deleted":          {"dtype": "BOOLEAN",   "nullable": false},
+        "ingestion_timestamp": {"dtype": "TIMESTAMP", "nullable": true},
+        "source_system":       {"dtype": "STRING",    "nullable": false}
+      }
+    },
+
+    {
+      "name": "unified_target_b_scd2",
+      "enabled": true,
+      "comment": "Target B - receives data from all 3 sources with different schema",
+      "keys": ["record_id", "source_system"],
+      "sequence_by": "event_timestamp",
+      "delete_condition": "is_deleted = true",
+      "track_history_except_columns": ["source_system"],
+
+      "source_mappings": {
+        "event_stream_1": {
+          "enabled": true,
+          "view_name": "stream1_to_target_b_v",
+          "flow_name": "stream1_to_target_b_flow",
+          "column_mapping": {
+            "record_id":           {"source_col": "id",              "transform": null},
+            "record_category":     {"source_col": "category",        "transform": null},
+            "record_amount":       {"source_col": "value",           "transform": null},
+            "event_timestamp":     {"source_col": "event_ts",        "transform": null},
+            "is_deleted":          {"source_col": "is_deleted",      "transform": null},
+            "source_system":       {"source_col": null,              "transform": null, "default": "stream_1"}
+          }
+        },
+        "event_stream_2": {
+          "enabled": true,
+          "view_name": "stream2_to_target_b_v",
+          "flow_name": "stream2_to_target_b_flow",
+          "column_mapping": {
+            "record_id":           {"source_col": "entity_id",       "transform": null},
+            "record_category":     {"source_col": "category",        "transform": null},
+            "record_amount":       {"source_col": "entity_value",    "transform": null},
+            "event_timestamp":     {"source_col": "timestamp",       "transform": null},
+            "is_deleted":          {"source_col": "deleted",         "transform": null},
+            "source_system":       {"source_col": null,              "transform": null, "default": "stream_2"}
+          }
+        },
+        "history_table": {
+          "enabled": true,
+          "view_name": "history_to_target_b_v",
+          "flow_name": "history_to_target_b_flow",
+          "column_mapping": {
+            "record_id":           {"source_col": "hist_id",         "transform": null},
+            "record_category":     {"source_col": "hist_category",   "transform": null},
+            "record_amount":       {"source_col": "hist_value",      "transform": null},
+            "event_timestamp":     {"source_col": "hist_timestamp",  "transform": null},
+            "is_deleted":          {"source_col": "hist_deleted",    "transform": null},
+            "source_system":       {"source_col": null,              "transform": null, "default": "history"}
+          }
+        }
+      },
+
+      "schema": {
+        "record_id":           {"dtype": "STRING",    "nullable": false},
+        "record_category":     {"dtype": "STRING",    "nullable": true},
+        "record_amount":       {"dtype": "DECIMAL(10,2)", "nullable": true},
+        "event_timestamp":     {"dtype": "TIMESTAMP", "nullable": false},
+        "is_deleted":          {"dtype": "BOOLEAN",   "nullable": false},
+        "source_system":       {"dtype": "STRING",    "nullable": false}
+      }
+    }
+  ]
+}

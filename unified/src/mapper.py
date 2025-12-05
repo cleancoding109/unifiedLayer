@@ -17,8 +17,18 @@ from pyspark.sql.column import Column
 
 try:
     import metadata_loader
+    from exceptions import (
+        MappingError,
+        ColumnNotFoundError,
+        InvalidMappingConfigError,
+    )
 except ImportError:
     from . import metadata_loader
+    from .exceptions import (
+        MappingError,
+        ColumnNotFoundError,
+        InvalidMappingConfigError,
+    )
 
 # COMMAND ----------
 
@@ -50,21 +60,68 @@ def apply_mapping(
         - Missing columns filled with defaults
         - Original data types preserved
     
+    Raises:
+        InvalidMappingConfigError: If column_mapping structure is invalid
+        ColumnNotFoundError: If a required source column doesn't exist
+    
     Example:
         >>> df = spark.readStream.table("raw_data_layer.rdl_customer_hist_st")
         >>> mapped_df = apply_mapping(df, column_mapping, "greenplum")
     """
+    # Validate column_mapping structure
+    if not column_mapping:
+        raise InvalidMappingConfigError(
+            target_column="(all)",
+            reason="column_mapping is empty or None"
+        )
+    
+    if not isinstance(column_mapping, dict):
+        raise InvalidMappingConfigError(
+            target_column="(all)",
+            reason=f"column_mapping must be a dictionary, got: {type(column_mapping).__name__}"
+        )
+    
+    # Get available columns for validation
+    df_columns = df.columns
     select_exprs = []
     
     for target_col, mapping in column_mapping.items():
+        # Validate mapping structure
+        if not isinstance(mapping, dict):
+            raise InvalidMappingConfigError(
+                target_column=target_col,
+                reason=f"mapping must be a dictionary, got: {type(mapping).__name__}"
+            )
+        
         source_col = mapping.get("source_col")
         default_val = mapping.get("default")
+        
+        # Validate source column exists if specified
+        if source_col is not None and source_col not in df_columns:
+            # Check if there's a default value as fallback
+            if default_val is None:
+                raise ColumnNotFoundError(
+                    column_name=source_col,
+                    source_name=source_name,
+                    available_columns=df_columns
+                )
+            else:
+                # Log warning but continue with default value
+                print(f"WARNING: Source column '{source_col}' not found for target '{target_col}' "
+                      f"in source '{source_name}'. Using default value: {default_val}")
+                source_col = None  # Force use of default
         
         # Build the column expression (mapping only, no transforms)
         col_expr = _build_mapping_expression(source_col, default_val)
         
         # Alias to target column name
         select_exprs.append(col_expr.alias(target_col))
+    
+    if not select_exprs:
+        raise InvalidMappingConfigError(
+            target_column="(all)",
+            reason="No valid column mappings could be created"
+        )
     
     return df.select(*select_exprs)
 

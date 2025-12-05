@@ -19,8 +19,22 @@ from pyspark.sql.column import Column
 
 try:
     import metadata_loader
+    from exceptions import (
+        TransformError,
+        UnknownTransformError,
+        TransformExecutionError,
+        SchemaNotFoundError,
+        ColumnSchemaNotFoundError,
+    )
 except ImportError:
     from . import metadata_loader
+    from .exceptions import (
+        TransformError,
+        UnknownTransformError,
+        TransformExecutionError,
+        SchemaNotFoundError,
+        ColumnSchemaNotFoundError,
+    )
 
 # COMMAND ----------
 
@@ -152,6 +166,12 @@ def apply_transforms(
     Returns:
         DataFrame with all columns transformed and cast to target types
     
+    Raises:
+        SchemaNotFoundError: If target schema is not defined in metadata
+        ColumnSchemaNotFoundError: If a column is not defined in target schema
+        UnknownTransformError: If an unknown transform type is specified
+        TransformExecutionError: If a transform fails during execution
+    
     Example:
         >>> mapped_df = mapper.apply_mapping(df, column_mapping, "greenplum")
         >>> transformed_df = apply_transforms(mapped_df, column_mapping, 0)
@@ -160,8 +180,21 @@ def apply_transforms(
     
     target_schema = metadata_loader.get_target_schema(target_index)
     
+    # Validate schema exists
+    if not target_schema:
+        raise SchemaNotFoundError(target_index=target_index)
+    
     for target_col, mapping in column_mapping.items():
         transform = mapping.get("transform")
+        
+        # Validate column exists in schema
+        if target_col not in target_schema:
+            raise ColumnSchemaNotFoundError(
+                column_name=target_col,
+                target_index=target_index,
+                available_columns=list(target_schema.keys())
+            )
+        
         target_type = target_schema[target_col]["dtype"]
         
         # Start with the column (already renamed by apply_mapping)
@@ -169,10 +202,26 @@ def apply_transforms(
         
         # Apply transform if specified
         if transform is not None:
-            col_expr = apply_transform(col_expr, transform)
+            try:
+                col_expr = apply_transform(col_expr, transform)
+            except UnknownTransformError:
+                raise  # Re-raise as-is
+            except Exception as e:
+                raise TransformExecutionError(
+                    transform_name=transform,
+                    column_name=target_col,
+                    error=str(e)
+                )
         
         # Cast to target type
-        col_expr = col_expr.cast(target_type)
+        try:
+            col_expr = col_expr.cast(target_type)
+        except Exception as e:
+            raise TransformExecutionError(
+                transform_name=f"cast({target_type})",
+                column_name=target_col,
+                error=str(e)
+            )
         
         # Alias to preserve column name
         select_exprs.append(col_expr.alias(target_col))
@@ -192,12 +241,12 @@ def apply_transform(col_expr: Column, transform_name: str) -> Column:
         Transformed column expression
     
     Raises:
-        ValueError: If transform_name is not found in registry
+        UnknownTransformError: If transform_name is not found in registry
     """
     if transform_name not in TRANSFORM_REGISTRY:
-        raise ValueError(
-            f"Unknown transform: '{transform_name}'. "
-            f"Available transforms: {list(TRANSFORM_REGISTRY.keys())}"
+        raise UnknownTransformError(
+            transform_name=transform_name,
+            available_transforms=list(TRANSFORM_REGISTRY.keys())
         )
     
     return TRANSFORM_REGISTRY[transform_name](col_expr)

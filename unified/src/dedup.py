@@ -26,6 +26,21 @@ Configuration Example:
 from pyspark.sql import DataFrame
 from pyspark.sql import functions as F
 
+try:
+    from exceptions import (
+        DedupError,
+        InvalidDedupConfigError,
+        WatermarkColumnNotFoundError,
+        DedupColumnsNotFoundError,
+    )
+except ImportError:
+    from .exceptions import (
+        DedupError,
+        InvalidDedupConfigError,
+        WatermarkColumnNotFoundError,
+        DedupColumnsNotFoundError,
+    )
+
 
 def apply_dedup(df: DataFrame, dedup_config: dict) -> DataFrame:
     """
@@ -55,6 +70,11 @@ def apply_dedup(df: DataFrame, dedup_config: dict) -> DataFrame:
     Returns:
         DataFrame with duplicates removed (or original if dedup disabled)
     
+    Raises:
+        InvalidDedupConfigError: If dedup_config structure is invalid
+        WatermarkColumnNotFoundError: If watermark column doesn't exist in DataFrame
+        DedupColumnsNotFoundError: If required dedup columns are missing
+    
     Example:
         >>> dedup_config = {
         ...     "enabled": True,
@@ -74,15 +94,37 @@ def apply_dedup(df: DataFrame, dedup_config: dict) -> DataFrame:
     if not dedup_config or not dedup_config.get("enabled", False):
         return df
     
+    # Validate config structure
+    if not isinstance(dedup_config, dict):
+        raise InvalidDedupConfigError(
+            reason="dedup_config must be a dictionary",
+            config=dedup_config
+        )
+    
+    # Get DataFrame columns for validation
+    df_columns = df.columns
+    
     # Step 1: Apply watermark for out-of-order handling
     # Watermark tells Spark how long to wait for late data
     # This MUST be applied before dropDuplicates for streaming queries
     watermark_column = dedup_config.get("watermark_column", "event_timestamp")
     watermark_delay = dedup_config.get("watermark_delay", "10 minutes")
     
-    # Only apply watermark if column exists in DataFrame
-    if watermark_column in df.columns:
-        df = df.withWatermark(watermark_column, watermark_delay)
+    # Validate watermark column exists
+    if watermark_column not in df_columns:
+        raise WatermarkColumnNotFoundError(
+            column_name=watermark_column,
+            available_columns=df_columns
+        )
+    
+    # Validate watermark_delay format
+    if not isinstance(watermark_delay, str) or not watermark_delay.strip():
+        raise InvalidDedupConfigError(
+            reason=f"watermark_delay must be a non-empty string (e.g., '10 minutes'), got: '{watermark_delay}'",
+            config=dedup_config
+        )
+    
+    df = df.withWatermark(watermark_column, watermark_delay)
     
     # Step 2: Offset-based deduplication (exact Kafka duplicates)
     # This handles producer retries where same message gets different offsets
@@ -92,9 +134,21 @@ def apply_dedup(df: DataFrame, dedup_config: dict) -> DataFrame:
             "offset_columns", 
             ["kafka_partition", "kafka_offset"]
         )
-        # Only apply if offset columns exist in DataFrame
-        existing_offset_cols = [c for c in offset_columns if c in df.columns]
+        
+        # Validate offset columns exist
+        existing_offset_cols = [c for c in offset_columns if c in df_columns]
+        missing_offset_cols = [c for c in offset_columns if c not in df_columns]
+        
+        if missing_offset_cols and not existing_offset_cols:
+            raise DedupColumnsNotFoundError(
+                missing_columns=missing_offset_cols,
+                available_columns=df_columns,
+                dedup_type="Offset"
+            )
+        
         if existing_offset_cols:
+            if missing_offset_cols:
+                print(f"WARNING: Some offset columns not found: {missing_offset_cols}. Using: {existing_offset_cols}")
             df = df.dropDuplicates(existing_offset_cols)
     
     # Step 3: Logical deduplication (business key + timestamp)
@@ -102,9 +156,20 @@ def apply_dedup(df: DataFrame, dedup_config: dict) -> DataFrame:
     # or same event with different Kafka metadata
     dedup_keys = dedup_config.get("dedup_keys", [])
     if dedup_keys:
-        # Only use keys that exist in DataFrame
-        existing_keys = [k for k in dedup_keys if k in df.columns]
+        # Validate dedup keys exist
+        existing_keys = [k for k in dedup_keys if k in df_columns]
+        missing_keys = [k for k in dedup_keys if k not in df_columns]
+        
+        if missing_keys and not existing_keys:
+            raise DedupColumnsNotFoundError(
+                missing_columns=missing_keys,
+                available_columns=df_columns,
+                dedup_type="Logical"
+            )
+        
         if existing_keys:
+            if missing_keys:
+                print(f"WARNING: Some dedup keys not found: {missing_keys}. Using: {existing_keys}")
             df = df.dropDuplicates(existing_keys)
     
     return df
@@ -130,6 +195,10 @@ def apply_watermark_only(df: DataFrame, watermark_config: dict) -> DataFrame:
     Returns:
         DataFrame with watermark applied (or original if disabled)
     
+    Raises:
+        InvalidDedupConfigError: If watermark_config structure is invalid
+        WatermarkColumnNotFoundError: If watermark column doesn't exist
+    
     Example:
         >>> config = {
         ...     "enabled": True,
@@ -141,11 +210,31 @@ def apply_watermark_only(df: DataFrame, watermark_config: dict) -> DataFrame:
     if not watermark_config or not watermark_config.get("enabled", False):
         return df
     
+    # Validate config structure
+    if not isinstance(watermark_config, dict):
+        raise InvalidDedupConfigError(
+            reason="watermark_config must be a dictionary",
+            config=watermark_config
+        )
+    
     watermark_column = watermark_config.get("watermark_column", "event_timestamp")
     watermark_delay = watermark_config.get("watermark_delay", "10 minutes")
     
-    if watermark_column in df.columns:
-        df = df.withWatermark(watermark_column, watermark_delay)
+    # Validate watermark column exists
+    if watermark_column not in df.columns:
+        raise WatermarkColumnNotFoundError(
+            column_name=watermark_column,
+            available_columns=df.columns
+        )
+    
+    # Validate watermark_delay format
+    if not isinstance(watermark_delay, str) or not watermark_delay.strip():
+        raise InvalidDedupConfigError(
+            reason=f"watermark_delay must be a non-empty string (e.g., '10 minutes'), got: '{watermark_delay}'",
+            config=watermark_config
+        )
+    
+    df = df.withWatermark(watermark_column, watermark_delay)
     
     return df
 

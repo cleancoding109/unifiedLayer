@@ -322,20 +322,62 @@ Multiple data sources feeding a single unified table:
 Use Case: Customer CDC from multiple source systems
 ```
 
-### 4.2 Many-to-Many (Workflow Events)
+### 4.2 Many-to-Many (N Sources × M Targets)
 
 Multiple sources feeding multiple domain-specific targets:
 
 ```
-┌─────────────────┐
-│  Event Stream   │──┬──▶ underwriting_scd2
-└─────────────────┘  │
-                     ├──▶ claims_scd2
-┌─────────────────┐  │
-│  History Table  │──┴──▶ policy_scd2
-└─────────────────┘
+┌─────────────────────┐
+│  Event Stream 1     │──┬──▶ underwriting_scd2
+└─────────────────────┘  │
+                         │
+┌─────────────────────┐  ├──▶ claims_scd2
+│  Event Stream 2     │──┤
+└─────────────────────┘  │
+                         │
+┌─────────────────────┐  │
+│  History Table      │──┴──▶ policy_scd2
+└─────────────────────┘
 
 Use Case: Workflow events split by domain/workflow_type
+```
+
+### 4.3 How Many-to-Many Works
+
+The framework creates **N × M resources** for N sources and M targets:
+
+| N Sources | M Targets | Views Created | CDC Flows | Streaming Tables |
+|-----------|-----------|---------------|-----------|------------------|
+| 2 | 3 | 6 | 6 | 3 |
+| 3 | 2 | 6 | 6 | 2 |
+| 4 | 4 | 16 | 16 | 4 |
+
+**Key Design Points:**
+- Each source-target combination gets a **unique view** with its own column mapping
+- View names and flow names must be **unique** across all targets
+- Same source can map to **different schemas** in different targets
+- Each target has its own **schema definition** and **SCD2 keys**
+
+**Example: Same Source, Different Mappings**
+
+```json
+// Target A: underwriting_scd2
+"event_stream_1": {
+  "view_name": "stream1_to_underwriting_v",
+  "column_mapping": {
+    "case_id": {"source_col": "id"},
+    "applicant_id": {"source_col": "customer_id"}
+  }
+}
+
+// Target B: claims_scd2
+"event_stream_1": {
+  "view_name": "stream1_to_claims_v",
+  "column_mapping": {
+    "claim_id": {"source_col": "id"},
+    "claimant_id": {"source_col": "customer_id"}
+  }
+}
 ```
 
 ---
@@ -368,6 +410,7 @@ resources/
 | `mapper.py` | `apply_mapping()` - column renaming, default values (no type changes) |
 | `transformations.py` | `apply_transforms()` - type conversions using registry pattern |
 | `dedup.py` | `apply_dedup()` - watermark-based deduplication for out-of-order Kafka data |
+| `exceptions.py` | Custom exception classes for specific error handling |
 | `views.py` | Create Lakeflow views, orchestrate mapping → transforms → dedup pipeline |
 | `pipeline.py` | Create streaming tables and CDC flows for all targets |
 
@@ -680,9 +723,99 @@ stats = get_dedup_stats(df, dedup_keys)
 
 ---
 
-## 10. Deployment
+## 10. Error Handling
 
-### 10.1 Bundle Commands
+### 10.1 Design Principle
+
+The framework uses **specific exception types** rather than generic exceptions. This provides:
+
+| Benefit | Description |
+|---------|-------------|
+| **Clear error messages** | Identify root cause immediately |
+| **Proper handling** | Catch specific errors at appropriate levels |
+| **Easier debugging** | Error context includes relevant data |
+| **Better logging** | Log specific error types for monitoring |
+
+### 10.2 Exception Hierarchy
+
+```
+UnifiedPipelineError (base)
+├── MetadataError
+│   ├── MetadataFileNotFoundError
+│   ├── MetadataParseError
+│   ├── MetadataValidationError
+│   ├── SourceNotFoundError
+│   ├── TargetNotFoundError
+│   └── SourceMappingNotFoundError
+├── MappingError
+│   ├── ColumnNotFoundError
+│   └── InvalidMappingConfigError
+├── TransformError
+│   ├── UnknownTransformError
+│   ├── TransformExecutionError
+│   ├── SchemaNotFoundError
+│   └── ColumnSchemaNotFoundError
+├── DedupError
+│   ├── InvalidDedupConfigError
+│   ├── WatermarkColumnNotFoundError
+│   └── DedupColumnsNotFoundError
+├── ViewCreationError
+├── SourceTableNotFoundError
+├── CDCFlowCreationError
+├── StreamingTableCreationError
+└── SparkConfigError
+```
+
+### 10.3 Exception Usage Examples
+
+```python
+# Metadata errors
+from exceptions import SourceNotFoundError
+
+try:
+    config = metadata_loader.get_source_config("invalid_source")
+except SourceNotFoundError as e:
+    print(f"Source not found: {e.source_name}")
+    print(f"Available: {e.available_sources}")
+
+# Transform errors
+from exceptions import UnknownTransformError
+
+try:
+    df = transformations.apply_transforms(df, column_mapping)
+except UnknownTransformError as e:
+    print(f"Unknown transform: {e.transform_name}")
+    print(f"Available: {e.available_transforms}")
+
+# Dedup errors
+from exceptions import WatermarkColumnNotFoundError
+
+try:
+    df = dedup.apply_dedup(df, dedup_config)
+except WatermarkColumnNotFoundError as e:
+    print(f"Watermark column missing: {e.column_name}")
+    print(f"Available columns: {e.available_columns}")
+```
+
+### 10.4 Error Attributes
+
+Each exception includes specific attributes for debugging:
+
+| Exception | Attributes |
+|-----------|------------|
+| `SourceNotFoundError` | `source_name`, `available_sources` |
+| `TargetNotFoundError` | `target_index`, `num_targets` |
+| `ColumnNotFoundError` | `column_name`, `source_name`, `available_columns` |
+| `UnknownTransformError` | `transform_name`, `available_transforms` |
+| `WatermarkColumnNotFoundError` | `column_name`, `available_columns` |
+| `ViewCreationError` | `view_name`, `source_name`, `error` |
+| `CDCFlowCreationError` | `flow_name`, `target_name`, `error` |
+
+---
+
+## 11. Deployment
+
+### 11.1 Bundle Commands
 
 ```bash
 # Validate configuration
@@ -698,7 +831,7 @@ databricks bundle run {pipeline_name}
 databricks bundle run {job_name}
 ```
 
-### 10.2 Workspace Structure
+### 11.2 Workspace Structure
 
 ```
 /Workspace/Shared/.bundle/{bundle_name}/{target}/
@@ -713,9 +846,9 @@ databricks bundle run {job_name}
 
 ---
 
-## 11. Adding New Pipelines
+## 12. Adding New Pipelines
 
-### 11.1 Steps
+### 12.1 Steps
 
 1. **Create metadata folder**: `src/metadata/stream/unified/{domain}/`
 2. **Create metadata JSON**: `{domain}_pipeline.json` with sources, targets, schema
@@ -724,7 +857,7 @@ databricks bundle run {job_name}
 5. **Create job YAML**: `{domain}_job.yml`
 6. **Update databricks.yml**: Add include pattern
 
-### 11.2 Include Pattern
+### 12.2 Include Pattern
 
 ```yaml
 include:
@@ -733,9 +866,9 @@ include:
 
 ---
 
-## 12. Testing
+## 13. Testing
 
-### 12.1 Test Pipeline
+### 13.1 Test Pipeline
 
 A test pipeline validates the metadata structure:
 
@@ -745,7 +878,7 @@ src/metadata/test/test_pipeline.json
 src/test_pipeline.py
 ```
 
-### 12.2 Step-by-Step Test Framework
+### 13.2 Step-by-Step Test Framework
 
 For complex pipelines (especially with dedup), use the step-by-step test job pattern:
 
@@ -790,7 +923,7 @@ resources:
             - task_key: step6_test_dedup
 ```
 
-### 12.3 Running Individual Test Steps
+### 13.3 Running Individual Test Steps
 
 ```bash
 # Run a specific test step
@@ -803,7 +936,7 @@ databricks bundle run {domain}_test_job --only step5_test_transformations
 databricks bundle run {domain}_test_job
 ```
 
-### 12.4 Unit Tests
+### 13.4 Unit Tests
 
 ```
 tests/
@@ -814,7 +947,7 @@ tests/
 
 ---
 
-## 13. Best Practices
+## 14. Best Practices
 
 1. **Naming Conventions**
    - Folder pattern: `{processing_type}/{layer}/{domain}/`

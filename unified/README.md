@@ -67,6 +67,7 @@ unified/
 │   ├── mapper.py                # Column mapping (rename, defaults)
 │   ├── transformations.py       # Type conversions (registry pattern)
 │   ├── dedup.py                 # Watermark-based deduplication
+│   ├── exceptions.py            # Custom exception classes
 │   ├── metadata_loader.py       # Load & inject runtime config
 │   ├── views.py                 # Dynamic view generation
 │   └── pipeline.py              # Main orchestration
@@ -127,6 +128,7 @@ GROUP BY source_system
 | `mapper.py` | Column renaming, default values (no type changes) |
 | `transformations.py` | Type conversions using registry pattern |
 | `dedup.py` | Watermark-based deduplication for Kafka/streaming sources |
+| `exceptions.py` | Specific exception types for error handling |
 | `metadata_loader.py` | Load JSON config, inject runtime variables |
 | `views.py` | Create Lakeflow views for each source |
 | `pipeline.py` | Create streaming tables and CDC flows |

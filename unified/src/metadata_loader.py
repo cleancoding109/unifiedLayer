@@ -1,6 +1,29 @@
 import json
 import os
 
+try:
+    from exceptions import (
+        MetadataError,
+        MetadataFileNotFoundError,
+        MetadataParseError,
+        MetadataValidationError,
+        SourceNotFoundError,
+        TargetNotFoundError,
+        SourceMappingNotFoundError,
+        SparkConfigError,
+    )
+except ImportError:
+    from .exceptions import (
+        MetadataError,
+        MetadataFileNotFoundError,
+        MetadataParseError,
+        MetadataValidationError,
+        SourceNotFoundError,
+        TargetNotFoundError,
+        SourceMappingNotFoundError,
+        SparkConfigError,
+    )
+
 # COMMAND ----------
 
 # MAGIC %md
@@ -135,18 +158,34 @@ def load_metadata() -> dict:
         dict: Complete pipeline metadata with catalog/schema injected
     
     Raises:
-        FileNotFoundError: If metadata file cannot be found
-        json.JSONDecodeError: If metadata file is invalid JSON
+        MetadataFileNotFoundError: If metadata file cannot be found
+        MetadataParseError: If metadata file is invalid JSON
     """
     metadata_path = _get_metadata_path()
     
     print(f"Loading metadata from: {metadata_path}")
     
     if not os.path.exists(metadata_path):
-        raise FileNotFoundError(f"Critical Error: Metadata file not found at {metadata_path}")
-        
-    with open(metadata_path, 'r') as f:
-        metadata = json.load(f)
+        # Collect all searched paths for error message
+        searched_paths = _get_searched_paths()
+        raise MetadataFileNotFoundError(
+            file_path=metadata_path,
+            searched_paths=searched_paths
+        )
+    
+    try:
+        with open(metadata_path, 'r') as f:
+            metadata = json.load(f)
+    except json.JSONDecodeError as e:
+        raise MetadataParseError(
+            file_path=metadata_path,
+            parse_error=str(e)
+        )
+    except IOError as e:
+        raise MetadataFileNotFoundError(
+            file_path=metadata_path,
+            searched_paths=[f"IO Error: {str(e)}"]
+        )
     
     # Inject runtime configuration from Spark config (set by databricks.yml)
     spark_config = get_spark_config()
@@ -166,6 +205,39 @@ def load_metadata() -> dict:
     print(f"Injected config - source_catalog: {spark_config['source_catalog']}, source_schema: {spark_config['source_schema']}")
     
     return metadata
+
+
+def _get_searched_paths() -> list:
+    """Get list of paths that were searched for metadata file."""
+    spark_config = get_spark_config()
+    metadata_path = spark_config.get("metadata_path", "stream/unified/customer_cdc/customer_cdc_pipeline.json")
+    
+    paths = []
+    
+    # Strategy 1: Relative to __file__
+    try:
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        paths.append(os.path.join(current_dir, "metadata", metadata_path))
+    except NameError:
+        paths.append(f"(relative to __file__)/metadata/{metadata_path}")
+    
+    # Strategy 2: Workspace path
+    try:
+        from pyspark.sql import SparkSession
+        spark = SparkSession.builder.getOrCreate()
+        bundle_path = spark.conf.get("bundle.sourcePath", "")
+        if bundle_path:
+            paths.append(os.path.join(bundle_path, "metadata", metadata_path))
+    except Exception:
+        paths.append(f"(bundle.sourcePath)/metadata/{metadata_path}")
+    
+    # Strategy 3: Fallback paths
+    paths.extend([
+        f"/Workspace/Shared/.bundle/unified/dev/files/src/metadata/{metadata_path}",
+        f"/Workspace/Shared/.bundle/unified/prod/files/src/metadata/{metadata_path}",
+    ])
+    
+    return paths
 
 # COMMAND ----------
 
@@ -205,10 +277,16 @@ def get_source_config(source_name: str) -> dict:
     
     Returns:
         dict: Source configuration (table_name, description, source_system_value, catalog, schema)
+    
+    Raises:
+        SourceNotFoundError: If source_name is not defined in metadata
     """
     sources = get_all_sources()
     if source_name not in sources:
-        raise ValueError(f"Unknown source: {source_name}. Valid sources: {list(sources.keys())}")
+        raise SourceNotFoundError(
+            source_name=source_name,
+            available_sources=list(sources.keys())
+        )
     return sources[source_name]
 
 
@@ -255,12 +333,21 @@ def get_target(index: int = 0) -> dict:
     
     Returns:
         dict: Target configuration including schema, transforms, source_mappings
+    
+    Raises:
+        TargetNotFoundError: If no targets are defined or index is out of range
     """
     targets = get_all_targets()
     if not targets:
-        raise ValueError("No targets defined in metadata")
+        raise TargetNotFoundError(
+            target_index=index,
+            num_targets=0
+        )
     if index >= len(targets):
-        raise ValueError(f"Target index {index} out of range. Available: {len(targets)}")
+        raise TargetNotFoundError(
+            target_index=index,
+            num_targets=len(targets)
+        )
     return targets[index]
 
 
@@ -352,10 +439,17 @@ def get_source_mapping(source_name: str, target_index: int = 0) -> dict:
     
     Returns:
         dict: Source mapping including view_name, flow_name, column_mapping
+    
+    Raises:
+        SourceMappingNotFoundError: If source_name is not mapped in the target
     """
     mappings = get_source_mappings(target_index)
     if source_name not in mappings:
-        raise ValueError(f"No mapping for source '{source_name}' in target[{target_index}]. Available: {list(mappings.keys())}")
+        raise SourceMappingNotFoundError(
+            source_name=source_name,
+            target_index=target_index,
+            available_mappings=list(mappings.keys())
+        )
     return mappings[source_name]
 
 
@@ -462,7 +556,10 @@ def validate_metadata() -> bool:
     Note: catalog and schema are injected at runtime from Spark config.
     
     Returns:
-        bool: True if valid, raises ValueError if invalid
+        bool: True if valid
+    
+    Raises:
+        MetadataValidationError: If validation fails with list of errors
     """
     errors = []
     
@@ -511,7 +608,7 @@ def validate_metadata() -> bool:
             errors.append(f"Missing sources.{source_name}.column_mapping")
     
     if errors:
-        raise ValueError(f"Metadata validation failed:\n" + "\n".join(f"  - {e}" for e in errors))
+        raise MetadataValidationError(errors=errors)
     
     return True
 

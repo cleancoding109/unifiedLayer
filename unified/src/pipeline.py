@@ -54,9 +54,19 @@ from pyspark.sql import functions as F
 try:
     import metadata_loader
     import views
+    from exceptions import (
+        CDCFlowCreationError,
+        StreamingTableCreationError,
+        MetadataError,
+    )
 except ImportError:
     from . import metadata_loader
     from . import views
+    from .exceptions import (
+        CDCFlowCreationError,
+        StreamingTableCreationError,
+        MetadataError,
+    )
 
 # COMMAND ----------
 
@@ -83,11 +93,17 @@ for target_idx, target in enumerate(all_targets):
     
     target_name = metadata_loader.get_target_name(target_idx)
     
-    # Create the streaming table for this target
-    dp.create_streaming_table(
-        name=target_name,
-        comment=target.get("comment", f"SCD Type 2 streaming table for {target_name}")
-    )
+    # Create the streaming table for this target with error handling
+    try:
+        dp.create_streaming_table(
+            name=target_name,
+            comment=target.get("comment", f"SCD Type 2 streaming table for {target_name}")
+        )
+    except Exception as e:
+        raise StreamingTableCreationError(
+            table_name=target_name,
+            error=str(e)
+        ) from e
     
     # Create CDC flows for all enabled source mappings of this target
     # This allows sequential merging of sources one at a time:
@@ -96,9 +112,11 @@ for target_idx, target in enumerate(all_targets):
     # 3. Finally enable kafka_cdc -> deploy & run -> start real-time streaming
     for source_key, source_mapping in metadata_loader.get_enabled_source_mappings(target_idx).items():
         
+        flow_name = source_mapping["flow_name"]
+        
         # Build kwargs for create_auto_cdc_flow
         cdc_flow_kwargs = {
-            "name": source_mapping["flow_name"],
+            "name": flow_name,
             "target": target_name,
             "source": source_mapping["view_name"],
             "keys": metadata_loader.get_scd2_keys(target_idx),
@@ -118,6 +136,14 @@ for target_idx, target in enumerate(all_targets):
         if track_history_except:
             cdc_flow_kwargs["track_history_except_column_list"] = track_history_except
         
-        dp.create_auto_cdc_flow(**cdc_flow_kwargs)
+        # Create CDC flow with error handling
+        try:
+            dp.create_auto_cdc_flow(**cdc_flow_kwargs)
+        except Exception as e:
+            raise CDCFlowCreationError(
+                flow_name=flow_name,
+                target_name=target_name,
+                error=str(e)
+            ) from e
 
 
