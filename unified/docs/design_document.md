@@ -7,18 +7,64 @@ This document describes the architecture and design of a **metadata-driven SCD T
 built on Databricks Lakeflow Declarative Pipelines. The framework supports merging multiple source paths 
 into unified streaming tables with automatic SCD2 history tracking.
 
-### 1.2 Key Capabilities
+### 1.2 Position in Overall Ingestion Framework
+
+This codebase implements **Stream 3 (UNIFIED)** - the final stage of the Bronze Layer in the overall Ingestion Framework:
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────────┐
+│                              INGESTION FRAMEWORK - BRONZE LAYER                          │
+├─────────────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                          │
+│   DATA SOURCES              RAW              PROCESSED              UNIFIED              │
+│                                                                                          │
+│   ┌──────────────┐     ┌──────────┐      ┌──────────────┐      ┌──────────────┐         │
+│   │  Confluent   │ ──▶ │ Stream 1 │ ───▶ │   Stream 2   │ ───▶ │              │         │
+│   │    Kafka     │     │  (RAW)   │      │ (PROCESSED)  │      │              │         │
+│   └──────────────┘     └──────────┘      └──────────────┘      │              │         │
+│                                                                 │              │         │
+│   ┌──────────────┐     ┌──────────┐                            │   Stream 3   │         │
+│   │  SQL Server  │ ──▶ │ Batch 1  │ ────────────────────────▶  │  (UNIFIED)   │         │
+│   │              │     │  (RAW)   │                            │              │         │
+│   └──────────────┘     └──────────┘                            │   SCD Type 2 │         │
+│                                                                 │   History    │         │
+│   ┌──────────────┐     ┌──────────┐                            │   Tracking   │         │
+│   │  Greenplum   │ ──▶ │ Batch 1  │ ────────────────────────▶  │              │         │
+│   │              │     │  (RAW)   │                            │              │         │
+│   └──────────────┘     └──────────┘                            └──────────────┘         │
+│                                                                                          │
+│   ◀───────────── Upstream Pipelines ─────────────▶  ◀── THIS FRAMEWORK ──▶              │
+│                                                                                          │
+└─────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+**What This Framework Handles (Stream 3):**
+- **Kafka Streams**: Receives processed data from Stream 2 (after RAW → PROCESSED transformations)
+- **Batch Sources**: Receives raw data from SQL Server/Greenplum Batch 1 tables directly
+- **Unified Output**: Combines all sources into SCD Type 2 streaming tables with history tracking
+
+**Source Types Supported:**
+| Source Type | Upstream Stage | Characteristics | Dedup Required |
+|-------------|----------------|-----------------|----------------|
+| Kafka CDC | Stream 2 (Processed) | Real-time, may have duplicates | ✅ Watermark-based |
+| SQL Server | Batch 1 (Raw) | Scheduled batch, no duplicates | ❌ Not needed |
+| Greenplum | Batch 1 (Raw) | Scheduled batch, no duplicates | ❌ Not needed |
+| History Tables | Batch 1 (Raw) | One-time or periodic load | ❌ Not needed |
+
+### 1.3 Key Capabilities
 - **Many-to-One Pattern**: Multiple sources → Single unified target (e.g., CDC consolidation)
 - **Many-to-Many Pattern**: Multiple sources → Multiple targets (e.g., workflow events)
 - **Metadata-Driven**: JSON configuration drives pipeline behavior
 - **Environment Agnostic**: Same code works across dev/prod with variable injection
+- **Source-Aware Processing**: Different handling for streaming (Kafka) vs batch (SQL/Greenplum) sources
 
-### 1.3 Framework Components
+### 1.4 Framework Components
 - **Lakeflow Python API:** `from pyspark import pipelines as dp`
 - **Configuration:** JSON metadata files with `targets[]` array structure
 - **Runtime Injection:** Catalog/schema from Spark config (set by databricks.yml)
+- **Deduplication**: Watermark-based dedup for Kafka sources with out-of-order handling
 
-### 1.4 High-Level Architecture
+### 1.5 High-Level Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
@@ -218,7 +264,134 @@ When Source A sends an update for C001:
 
 ---
 
-## 3. Metadata Structure
+## 3. Source-Specific Processing
+
+The framework handles different source types according to their position in the Ingestion Framework:
+
+### 3.1 Source Type Characteristics
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────────┐
+│                           SOURCE TYPE PROCESSING MATRIX                                  │
+├───────────────────┬─────────────────┬─────────────────┬─────────────────────────────────┤
+│ Source Type       │ Input Stage     │ Processing      │ Stream 3 Handling               │
+├───────────────────┼─────────────────┼─────────────────┼─────────────────────────────────┤
+│ Confluent Kafka   │ Stream 2        │ Streaming       │ Dedup + Watermark + CDC Flow    │
+│ SQL Server        │ Batch 1         │ Batch           │ Direct CDC Flow (no dedup)      │
+│ Greenplum         │ Batch 1         │ Batch           │ Direct CDC Flow (no dedup)      │
+│ History Tables    │ Batch 1         │ One-time/Batch  │ Direct CDC Flow (no dedup)      │
+└───────────────────┴─────────────────┴─────────────────┴─────────────────────────────────┘
+```
+
+### 3.2 Kafka Sources (Stream 1 → Stream 2 → Stream 3)
+
+Kafka sources come through the full streaming pipeline and require special handling:
+
+```
+┌──────────────────────────────────────────────────────────────────────────────┐
+│  KAFKA SOURCE PROCESSING (Stream 3)                                          │
+│                                                                               │
+│  Stream 2 (Processed)     Deduplication          View          Target        │
+│  ┌─────────────────┐    ┌─────────────────┐   ┌─────────┐   ┌───────────┐   │
+│  │ rdl_claims_cdc  │───▶│  Watermark +    │──▶│  View   │──▶│  Unified  │   │
+│  │ (may have dups) │    │  Partition By   │   │ (clean) │   │  SCD2     │   │
+│  └─────────────────┘    │  Order By DESC  │   └─────────┘   └───────────┘   │
+│                         └─────────────────┘                                  │
+│                                                                               │
+│  Why Dedup is Needed:                                                        │
+│  • Kafka at-least-once delivery guarantees                                   │
+│  • Network retries can cause duplicate messages                              │
+│  • Out-of-order arrival due to partition processing                          │
+│  • Framework uses watermark + ROW_NUMBER to select latest                    │
+└──────────────────────────────────────────────────────────────────────────────┘
+```
+
+**Dedup Configuration (in source definition):**
+```json
+{
+  "sources": {
+    "claims_cdc": {
+      "table_name": "rdl_claims_cdc_st",
+      "dedup": {
+        "enabled": true,
+        "watermark_column": "kafka_timestamp",
+        "partition_columns": ["claim_id", "source_system"],
+        "order_column": "kafka_timestamp",
+        "order_direction": "desc"
+      }
+    }
+  }
+}
+```
+
+### 3.3 Batch Sources (Batch 1 → Stream 3)
+
+SQL Server and Greenplum sources skip the streaming stages and connect directly:
+
+```
+┌──────────────────────────────────────────────────────────────────────────────┐
+│  BATCH SOURCE PROCESSING (Stream 3)                                          │
+│                                                                               │
+│  Batch 1 (Raw)                     View                    Target            │
+│  ┌─────────────────┐            ┌─────────────────┐     ┌───────────────┐   │
+│  │ rdl_customer_   │    ────▶   │  Mapping +      │ ──▶ │   Unified     │   │
+│  │ sqlserver_st    │            │  Transforms     │     │   SCD2        │   │
+│  └─────────────────┘            └─────────────────┘     └───────────────┘   │
+│                                                                               │
+│  Why No Dedup:                                                               │
+│  • Batch loads are scheduled and controlled                                  │
+│  • Source systems handle their own consistency                               │
+│  • No network retry issues like streaming                                    │
+│  • Direct 1:1 record mapping                                                 │
+└──────────────────────────────────────────────────────────────────────────────┘
+```
+
+**Batch Configuration (no dedup section):**
+```json
+{
+  "sources": {
+    "customer_sqlserver": {
+      "table_name": "rdl_customer_sqlserver_st",
+      "description": "SQL Server batch load",
+      "source_system_value": "sqlserver"
+    }
+  }
+}
+```
+
+### 3.4 Mixed Source Pipeline Example
+
+A typical production pipeline combines both streaming and batch sources:
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│              UNIFIED CUSTOMER PIPELINE - MIXED SOURCES                           │
+├─────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                  │
+│  ┌─────────────────┐      ┌────────────┐                                        │
+│  │ Kafka: CRM CDC  │ ───▶ │   DEDUP    │ ──┐                                    │
+│  │ (Stream 2)      │      └────────────┘   │                                    │
+│  └─────────────────┘                       │    ┌────────────────────────────┐  │
+│                                            ├──▶ │  unified_customer_scd2     │  │
+│  ┌─────────────────┐                       │    │  ────────────────────────  │  │
+│  │ SQL Server:     │ ─────────────────────┤    │  PRIMARY KEY:              │  │
+│  │ Customer Master │                       │    │  (customer_id,             │  │
+│  │ (Batch 1)       │                       │    │   source_system)           │  │
+│  └─────────────────┘                       │    └────────────────────────────┘  │
+│                                            │                                     │
+│  ┌─────────────────┐                       │                                     │
+│  │ Greenplum:      │ ─────────────────────┘                                     │
+│  │ Legacy Export   │                                                             │
+│  │ (Batch 1)       │                                                             │
+│  └─────────────────┘                                                             │
+│                                                                                  │
+│  Result: 3 sources × 1 target = 3 CDC flows, each preserving source_system      │
+└─────────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 4. Metadata Structure
 
 ### 3.1 New `targets[]` Array Structure
 
@@ -300,9 +473,9 @@ The framework uses a flexible metadata structure that separates shared source de
 
 ---
 
-## 4. Supported Patterns
+## 5. Supported Patterns
 
-### 4.1 Many-to-One (CDC Consolidation)
+### 5.1 Many-to-One (CDC Consolidation)
 
 Multiple data sources feeding a single unified table:
 
@@ -322,7 +495,7 @@ Multiple data sources feeding a single unified table:
 Use Case: Customer CDC from multiple source systems
 ```
 
-### 4.2 Many-to-Many (N Sources × M Targets)
+### 5.2 Many-to-Many (N Sources × M Targets)
 
 Multiple sources feeding multiple domain-specific targets:
 
@@ -342,7 +515,7 @@ Multiple sources feeding multiple domain-specific targets:
 Use Case: Workflow events split by domain/workflow_type
 ```
 
-### 4.3 How Many-to-Many Works
+### 5.3 How Many-to-Many Works
 
 The framework creates **N × M resources** for N sources and M targets:
 
@@ -382,9 +555,9 @@ The framework creates **N × M resources** for N sources and M targets:
 
 ---
 
-## 5. Module Architecture
+## 6. Module Architecture
 
-### 5.1 File Structure
+### 6.1 File Structure
 
 ```
 src/
@@ -402,7 +575,7 @@ resources/
     └── {domain}_job.yml                 # Job resource
 ```
 
-### 5.2 Module Responsibilities
+### 6.2 Module Responsibilities
 
 | Module | Purpose |
 |--------|----------|
@@ -414,7 +587,7 @@ resources/
 | `views.py` | Create Lakeflow views, orchestrate mapping → transforms → dedup pipeline |
 | `pipeline.py` | Create streaming tables and CDC flows for all targets |
 
-### 5.3 Pipeline Flow
+### 6.3 Pipeline Flow
 
 ```
 Source Table
@@ -440,7 +613,7 @@ dedup.apply_dedup(df, dedup_config)  [Optional - for Kafka sources]
 Lakeflow View → CDC Flow → Target Streaming Table
 ```
 
-### 5.4 Accessor Functions
+### 6.4 Accessor Functions
 
 ```python
 # Target accessors (support multiple targets)
@@ -459,9 +632,9 @@ get_full_source_config(source_name, target_index=0)  # Merged config
 
 ---
 
-## 6. Configuration Flow
+## 7. Configuration Flow
 
-### 6.1 Environment Variables
+### 7.1 Environment Variables
 
 Defined in `databricks.yml` per environment:
 
@@ -481,7 +654,7 @@ targets:
       source_schema: raw_data_layer
 ```
 
-### 6.2 Variable Injection
+### 7.2 Variable Injection
 
 ```
 databricks.yml (variables per environment)
@@ -496,7 +669,7 @@ metadata_loader.py (reads Spark config, injects into metadata)
 Runtime metadata with catalog/schema populated
 ```
 
-### 6.3 Pipeline Configuration
+### 7.3 Pipeline Configuration
 
 ```yaml
 # {domain}_pipeline.yml
@@ -511,9 +684,9 @@ configuration:
 
 ---
 
-## 7. SCD Type 2 Implementation
+## 8. SCD Type 2 Implementation
 
-### 7.1 CDC Flow Configuration
+### 8.1 CDC Flow Configuration
 
 Each source mapping creates a CDC flow:
 
@@ -530,7 +703,7 @@ dp.create_auto_cdc_flow(
 )
 ```
 
-### 7.2 Auto-Managed Columns
+### 8.2 Auto-Managed Columns
 
 Lakeflow automatically adds and manages:
 
@@ -539,7 +712,7 @@ Lakeflow automatically adds and manages:
 | `__START_AT` | Version start timestamp |
 | `__END_AT` | Version end timestamp (NULL = current) |
 
-### 7.3 Track History Except Columns
+### 8.3 Track History Except Columns
 
 Columns in `track_history_except_columns` are updated in-place (SCD Type 1 behavior) without creating new history records:
 
@@ -553,9 +726,9 @@ Columns in `track_history_except_columns` are updated in-place (SCD Type 1 behav
 
 ---
 
-## 8. Schema Mapping
+## 9. Schema Mapping
 
-### 8.1 Column Mapping Format
+### 9.1 Column Mapping Format
 
 ```json
 "column_mapping": {
@@ -567,7 +740,7 @@ Columns in `track_history_except_columns` are updated in-place (SCD Type 1 behav
 }
 ```
 
-### 8.2 Transform Registry
+### 9.2 Transform Registry
 
 Transforms are implemented using a registry pattern for easy extensibility:
 
@@ -598,7 +771,7 @@ TRANSFORM_REGISTRY = {
 | `cast_long` | Cast to LONG |
 | `cast_boolean` | Normalize boolean values (TRUE/1/Y/YES → true) |
 
-### 8.3 Default Values
+### 9.3 Default Values
 
 When `source_col` is null, the default value is used:
 
@@ -612,9 +785,9 @@ When `source_col` is null, the default value is used:
 
 ---
 
-## 9. Deduplication & Out-of-Order Handling
+## 10. Deduplication & Out-of-Order Handling
 
-### 9.1 The Problem: Kafka Data Challenges
+### 10.1 The Problem: Kafka Data Challenges
 
 When consuming data from Kafka, we encounter several challenges:
 
@@ -624,7 +797,7 @@ When consuming data from Kafka, we encounter several challenges:
 | **Kafka Retries** | Same message may be delivered multiple times (at-least-once semantics) |
 | **Logical Duplicates** | Same business entity may appear multiple times within a window |
 
-### 9.2 Deduplication Strategy
+### 10.2 Deduplication Strategy
 
 The framework implements a **three-layer deduplication strategy**:
 
@@ -657,7 +830,7 @@ The framework implements a **three-layer deduplication strategy**:
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-### 9.3 Dedup Configuration in Metadata
+### 10.3 Dedup Configuration in Metadata
 
 ```json
 "source_mappings": {
@@ -683,7 +856,7 @@ The framework implements a **three-layer deduplication strategy**:
 }
 ```
 
-### 9.4 Configuration Options
+### 10.4 Configuration Options
 
 | Option | Description | Default |
 |--------|-------------|---------|
@@ -695,7 +868,7 @@ The framework implements a **three-layer deduplication strategy**:
 | `logical_dedup.enabled` | Enable business key deduplication | `true` |
 | `logical_dedup.columns` | Columns for logical dedup (business keys) | Required |
 
-### 9.5 When to Use Dedup
+### 10.5 When to Use Dedup
 
 | Source Type | Dedup Recommended | Reason |
 |-------------|-------------------|--------|
@@ -703,7 +876,7 @@ The framework implements a **three-layer deduplication strategy**:
 | **Batch/Legacy** | ❌ No | Already deduplicated, no order issues |
 | **CDC Sources** | ⚠️ Depends | Check if CDC connector handles dedup |
 
-### 9.6 Dedup Module API
+### 10.6 Dedup Module API
 
 ```python
 from dedup import apply_dedup, apply_watermark_only, validate_dedup_config, get_dedup_stats
@@ -723,9 +896,9 @@ stats = get_dedup_stats(df, dedup_keys)
 
 ---
 
-## 10. Error Handling
+## 11. Error Handling
 
-### 10.1 Design Principle
+### 11.1 Design Principle
 
 The framework uses **specific exception types** rather than generic exceptions. This provides:
 
@@ -736,7 +909,7 @@ The framework uses **specific exception types** rather than generic exceptions. 
 | **Easier debugging** | Error context includes relevant data |
 | **Better logging** | Log specific error types for monitoring |
 
-### 10.2 Exception Hierarchy
+### 11.2 Exception Hierarchy
 
 ```
 UnifiedPipelineError (base)
@@ -766,7 +939,7 @@ UnifiedPipelineError (base)
 └── SparkConfigError
 ```
 
-### 10.3 Exception Usage Examples
+### 11.3 Exception Usage Examples
 
 ```python
 # Metadata errors
@@ -797,7 +970,7 @@ except WatermarkColumnNotFoundError as e:
     print(f"Available columns: {e.available_columns}")
 ```
 
-### 10.4 Error Attributes
+### 11.4 Error Attributes
 
 Each exception includes specific attributes for debugging:
 
@@ -813,9 +986,9 @@ Each exception includes specific attributes for debugging:
 
 ---
 
-## 11. Deployment
+## 12. Deployment
 
-### 11.1 Bundle Commands
+### 12.1 Bundle Commands
 
 ```bash
 # Validate configuration
@@ -831,7 +1004,7 @@ databricks bundle run {pipeline_name}
 databricks bundle run {job_name}
 ```
 
-### 11.2 Workspace Structure
+### 12.2 Workspace Structure
 
 ```
 /Workspace/Shared/.bundle/{bundle_name}/{target}/
@@ -846,9 +1019,9 @@ databricks bundle run {job_name}
 
 ---
 
-## 12. Adding New Pipelines
+## 13. Adding New Pipelines
 
-### 12.1 Steps
+### 13.1 Steps
 
 1. **Create metadata folder**: `src/metadata/stream/unified/{domain}/`
 2. **Create metadata JSON**: `{domain}_pipeline.json` with sources, targets, schema
@@ -857,7 +1030,7 @@ databricks bundle run {job_name}
 5. **Create job YAML**: `{domain}_job.yml`
 6. **Update databricks.yml**: Add include pattern
 
-### 12.2 Include Pattern
+### 13.2 Include Pattern
 
 ```yaml
 include:
@@ -866,9 +1039,9 @@ include:
 
 ---
 
-## 13. Testing
+## 14. Testing
 
-### 13.1 Test Pipeline
+### 14.1 Test Pipeline
 
 A test pipeline validates the metadata structure:
 
@@ -878,7 +1051,7 @@ src/metadata/test/test_pipeline.json
 src/test_pipeline.py
 ```
 
-### 13.2 Step-by-Step Test Framework
+### 14.2 Step-by-Step Test Framework
 
 For complex pipelines (especially with dedup), use the step-by-step test job pattern:
 
@@ -923,7 +1096,7 @@ resources:
             - task_key: step6_test_dedup
 ```
 
-### 13.3 Running Individual Test Steps
+### 14.3 Running Individual Test Steps
 
 ```bash
 # Run a specific test step
@@ -936,7 +1109,7 @@ databricks bundle run {domain}_test_job --only step5_test_transformations
 databricks bundle run {domain}_test_job
 ```
 
-### 13.4 Unit Tests
+### 14.4 Unit Tests
 
 ```
 tests/
@@ -947,7 +1120,7 @@ tests/
 
 ---
 
-## 14. Best Practices
+## 15. Best Practices
 
 1. **Naming Conventions**
    - Folder pattern: `{processing_type}/{layer}/{domain}/`
