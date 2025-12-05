@@ -18,6 +18,8 @@ Source Tables (Bronze/Raw Layer)
         ↓
     apply_transforms()  # Type conversions
         ↓
+    apply_dedup()       # Watermark + dedup (optional, for Kafka)
+        ↓
     CDC Flows (per source)
         ↓
 Target Tables (Unified Layer)
@@ -39,9 +41,9 @@ Per Databricks documentation, we use **separate `create_auto_cdc_flow()` calls**
 ### Pipeline Flow
 
 ```
-Source Table → mapper.apply_mapping() → transformations.apply_transforms() → View → CDC Flow → Target
-               (rename columns)         (type conversions)                      
-               (set defaults)           (epoch→timestamp, etc.)
+Source Table → mapper.apply_mapping() → transformations.apply_transforms() → dedup.apply_dedup() → View → CDC Flow → Target
+               (rename columns)         (type conversions)                    (watermark + dedup)
+               (set defaults)           (epoch→timestamp, etc.)               (for Kafka sources)
 ```
 
 ### SCD Type 2 Features
@@ -60,15 +62,19 @@ unified/
 │   ├── metadata/
 │   │   └── stream/unified/{domain}/
 │   │       └── {domain}_pipeline.json   # Metadata configuration
+│   ├── data_setup/                      # Test data setup notebooks
+│   ├── test_notebooks/                  # Step-by-step test notebooks
 │   ├── mapper.py                # Column mapping (rename, defaults)
 │   ├── transformations.py       # Type conversions (registry pattern)
+│   ├── dedup.py                 # Watermark-based deduplication
 │   ├── metadata_loader.py       # Load & inject runtime config
 │   ├── views.py                 # Dynamic view generation
 │   └── pipeline.py              # Main orchestration
 ├── resources/
 │   └── stream/unified/{domain}/
 │       ├── {domain}_pipeline.yml  # Pipeline resource
-│       └── {domain}_job.yml       # Job resource
+│       ├── {domain}_job.yml       # Job resource
+│       └── {domain}_test_job.yml  # Step-by-step test job (optional)
 ├── docs/
 │   ├── design_document.md       # Technical design
 │   └── implementation_plan.md   # Implementation phases
@@ -120,6 +126,7 @@ GROUP BY source_system
 |--------|----------------|
 | `mapper.py` | Column renaming, default values (no type changes) |
 | `transformations.py` | Type conversions using registry pattern |
+| `dedup.py` | Watermark-based deduplication for Kafka/streaming sources |
 | `metadata_loader.py` | Load JSON config, inject runtime variables |
 | `views.py` | Create Lakeflow views for each source |
 | `pipeline.py` | Create streaming tables and CDC flows |
@@ -138,6 +145,32 @@ GROUP BY source_system
 | `cast_long` | Cast to LONG |
 | `cast_boolean` | Normalize boolean values (Y/N, 1/0, etc.) |
 
+### Deduplication Configuration
+
+For Kafka/streaming sources with out-of-order data or at-least-once delivery:
+
+```json
+"dedup_config": {
+  "enabled": true,
+  "watermark_column": "event_timestamp",
+  "watermark_delay": "30 minutes",
+  "offset_dedup": {
+    "enabled": true,
+    "columns": ["kafka_partition", "kafka_offset"]
+  },
+  "logical_dedup": {
+    "enabled": true,
+    "columns": ["claim_id", "source_system"]
+  }
+}
+```
+
+| Layer | Purpose |
+|-------|---------|
+| **Watermark** | Tolerates late-arriving data within window |
+| **Offset Dedup** | Removes Kafka retry duplicates (partition+offset) |
+| **Logical Dedup** | Removes business key duplicates within window |
+
 ### Target Table Auto-Managed Columns
 
 | Column | Type | Description |
@@ -155,6 +188,24 @@ GROUP BY source_system
 6. **Update databricks.yml**: Add include pattern
 
 See [Implementation Plan](docs/implementation_plan.md) for detailed steps.
+
+## Step-by-Step Testing
+
+For complex pipelines (especially with dedup), use the test job pattern to validate each module:
+
+```bash
+# Run individual test steps
+databricks bundle run claims_cdc_test_job --only step1_create_tables
+databricks bundle run claims_cdc_test_job --only step2_load_test_data
+databricks bundle run claims_cdc_test_job --only step3_test_metadata
+databricks bundle run claims_cdc_test_job --only step4_test_mapper
+databricks bundle run claims_cdc_test_job --only step5_test_transformations
+databricks bundle run claims_cdc_test_job --only step6_test_dedup
+databricks bundle run claims_cdc_test_job --only step7_run_pipeline
+
+# Run full test job
+databricks bundle run claims_cdc_test_job
+```
 
 ## Development
 

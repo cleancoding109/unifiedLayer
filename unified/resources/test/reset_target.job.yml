@@ -5,7 +5,7 @@ resources:
       tasks:
         - task_key: reset_table
           notebook_task:
-            notebook_path: ../../src/data_setup/reset_target.py
+            notebook_path: ../../data_setup/reset_target.py
             source: WORKSPACE
 
 

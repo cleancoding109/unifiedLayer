@@ -1,0 +1,81 @@
+# Claims CDC Test Job - Step by Step Testing
+# This job allows testing each module independently
+resources:
+  jobs:
+    claims_cdc_test_job:
+      name: "[${bundle.target}] Claims CDC Test - Step by Step"
+
+      parameters:
+        - name: catalog
+          default: ${var.catalog}
+        - name: schema
+          default: ${var.schema}
+        - name: source_catalog
+          default: ${var.source_catalog}
+        - name: source_schema
+          default: ${var.source_schema}
+
+      tasks:
+        # Step 1: Create source tables (rdl_claims_legacy_st, rdl_claims_kafka_st)
+        - task_key: step1_create_tables
+          notebook_task:
+            notebook_path: ../../../../data_setup/06_create_claims_tables.py
+            source: WORKSPACE
+
+        # Step 2: Load test data with dedup scenarios
+        - task_key: step2_load_test_data
+          depends_on:
+            - task_key: step1_create_tables
+          notebook_task:
+            notebook_path: ../../../../data_setup/07_load_claims_data.py
+            source: WORKSPACE
+
+        # Step 3: Test metadata loading
+        - task_key: step3_test_metadata
+          depends_on:
+            - task_key: step2_load_test_data
+          notebook_task:
+            notebook_path: ../../../../src/test_notebooks/test_claims_metadata.py
+            source: WORKSPACE
+          environment_key: default
+
+        # Step 4: Test mapper module
+        - task_key: step4_test_mapper
+          depends_on:
+            - task_key: step3_test_metadata
+          notebook_task:
+            notebook_path: ../../../../src/test_notebooks/test_claims_mapper.py
+            source: WORKSPACE
+          environment_key: default
+
+        # Step 5: Test transformations module
+        - task_key: step5_test_transformations
+          depends_on:
+            - task_key: step4_test_mapper
+          notebook_task:
+            notebook_path: ../../../../src/test_notebooks/test_claims_transformations.py
+            source: WORKSPACE
+          environment_key: default
+
+        # Step 6: Test dedup module
+        - task_key: step6_test_dedup
+          depends_on:
+            - task_key: step5_test_transformations
+          notebook_task:
+            notebook_path: ../../../../src/test_notebooks/test_claims_dedup.py
+            source: WORKSPACE
+          environment_key: default
+
+        # Step 7: Run full pipeline (optional - only if all tests pass)
+        - task_key: step7_run_pipeline
+          depends_on:
+            - task_key: step6_test_dedup
+          pipeline_task:
+            pipeline_id: ${resources.pipelines.claims_cdc_pipeline.id}
+
+      environments:
+        - environment_key: default
+          spec:
+            environment_version: "2"
+            dependencies:
+              - ../../../../dist/*.whl

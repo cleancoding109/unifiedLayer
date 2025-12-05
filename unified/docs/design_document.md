@@ -367,7 +367,8 @@ resources/
 | `metadata_loader.py` | Load JSON, inject catalog/schema from Spark config, provide accessor functions |
 | `mapper.py` | `apply_mapping()` - column renaming, default values (no type changes) |
 | `transformations.py` | `apply_transforms()` - type conversions using registry pattern |
-| `views.py` | Create Lakeflow views, orchestrate mapping → transforms pipeline |
+| `dedup.py` | `apply_dedup()` - watermark-based deduplication for out-of-order Kafka data |
+| `views.py` | Create Lakeflow views, orchestrate mapping → transforms → dedup pipeline |
 | `pipeline.py` | Create streaming tables and CDC flows for all targets |
 
 ### 5.3 Pipeline Flow
@@ -385,6 +386,12 @@ mapper.apply_mapping(df, column_mapping)
 transformations.apply_transforms(df, column_mapping)
   ├── Apply registered transforms (to_date, epoch_to_timestamp, etc.)
   └── Cast all columns to target data types
+     │
+     ▼
+dedup.apply_dedup(df, dedup_config)  [Optional - for Kafka sources]
+  ├── Apply watermark for late data tolerance
+  ├── Offset dedup (kafka_partition + kafka_offset)
+  └── Logical dedup (business keys like claim_id)
      │
      ▼
 Lakeflow View → CDC Flow → Target Streaming Table
@@ -562,9 +569,120 @@ When `source_col` is null, the default value is used:
 
 ---
 
-## 9. Deployment
+## 9. Deduplication & Out-of-Order Handling
 
-### 9.1 Bundle Commands
+### 9.1 The Problem: Kafka Data Challenges
+
+When consuming data from Kafka, we encounter several challenges:
+
+| Challenge | Description |
+|-----------|-------------|
+| **Out-of-Order Arrival** | Events may arrive out of timestamp order due to network delays |
+| **Kafka Retries** | Same message may be delivered multiple times (at-least-once semantics) |
+| **Logical Duplicates** | Same business entity may appear multiple times within a window |
+
+### 9.2 Deduplication Strategy
+
+The framework implements a **three-layer deduplication strategy**:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  Layer 1: WATERMARK (Out-of-Order Tolerance)                    │
+│  ┌─────────────────────────────────────────────────────────┐   │
+│  │  withWatermark("event_timestamp", "30 minutes")          │   │
+│  │  - Tolerates late-arriving data within window            │   │
+│  │  - Discards data older than watermark threshold          │   │
+│  └─────────────────────────────────────────────────────────┘   │
+│                              ↓                                  │
+│  Layer 2: OFFSET DEDUP (Kafka Retry Handling)                   │
+│  ┌─────────────────────────────────────────────────────────┐   │
+│  │  dropDuplicatesWithinWatermark(                          │   │
+│  │    ["kafka_partition", "kafka_offset"]                   │   │
+│  │  )                                                       │   │
+│  │  - Removes duplicate messages from Kafka retries         │   │
+│  │  - Partition+Offset uniquely identifies each message     │   │
+│  └─────────────────────────────────────────────────────────┘   │
+│                              ↓                                  │
+│  Layer 3: LOGICAL DEDUP (Business Key Dedup)                    │
+│  ┌─────────────────────────────────────────────────────────┐   │
+│  │  dropDuplicatesWithinWatermark(                          │   │
+│  │    ["claim_id", "source_system"]                         │   │
+│  │  )                                                       │   │
+│  │  - Removes duplicate business entities within window     │   │
+│  │  - Keeps first occurrence of each entity                 │   │
+│  └─────────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### 9.3 Dedup Configuration in Metadata
+
+```json
+"source_mappings": {
+  "kafka_claims": {
+    "enabled": true,
+    "view_name": "kafka_claims_v",
+    "flow_name": "kafka_claims_flow",
+    "dedup_config": {
+      "enabled": true,
+      "watermark_column": "event_timestamp",
+      "watermark_delay": "30 minutes",
+      "offset_dedup": {
+        "enabled": true,
+        "columns": ["kafka_partition", "kafka_offset"]
+      },
+      "logical_dedup": {
+        "enabled": true,
+        "columns": ["claim_id", "source_system"]
+      }
+    },
+    "column_mapping": { ... }
+  }
+}
+```
+
+### 9.4 Configuration Options
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `enabled` | Enable/disable deduplication for this source | `false` |
+| `watermark_column` | Column to use for watermark (must be TIMESTAMP) | Required |
+| `watermark_delay` | Late data tolerance (e.g., "30 minutes", "1 hour") | Required |
+| `offset_dedup.enabled` | Enable Kafka offset-based deduplication | `true` |
+| `offset_dedup.columns` | Columns for offset dedup (partition+offset) | `["kafka_partition", "kafka_offset"]` |
+| `logical_dedup.enabled` | Enable business key deduplication | `true` |
+| `logical_dedup.columns` | Columns for logical dedup (business keys) | Required |
+
+### 9.5 When to Use Dedup
+
+| Source Type | Dedup Recommended | Reason |
+|-------------|-------------------|--------|
+| **Kafka/Streaming** | ✅ Yes | At-least-once delivery, out-of-order arrival |
+| **Batch/Legacy** | ❌ No | Already deduplicated, no order issues |
+| **CDC Sources** | ⚠️ Depends | Check if CDC connector handles dedup |
+
+### 9.6 Dedup Module API
+
+```python
+from dedup import apply_dedup, apply_watermark_only, validate_dedup_config, get_dedup_stats
+
+# Full deduplication pipeline
+df_deduped = apply_dedup(df, dedup_config)
+
+# Watermark only (no dedup)
+df_watermarked = apply_watermark_only(df, dedup_config)
+
+# Validate configuration
+warnings = validate_dedup_config(dedup_config)
+
+# Get dedup statistics (for testing)
+stats = get_dedup_stats(df, dedup_keys)
+```
+
+---
+
+## 10. Deployment
+
+### 10.1 Bundle Commands
 
 ```bash
 # Validate configuration
@@ -580,7 +698,7 @@ databricks bundle run {pipeline_name}
 databricks bundle run {job_name}
 ```
 
-### 9.2 Workspace Structure
+### 10.2 Workspace Structure
 
 ```
 /Workspace/Shared/.bundle/{bundle_name}/{target}/
@@ -595,9 +713,9 @@ databricks bundle run {job_name}
 
 ---
 
-## 10. Adding New Pipelines
+## 11. Adding New Pipelines
 
-### 10.1 Steps
+### 11.1 Steps
 
 1. **Create metadata folder**: `src/metadata/stream/unified/{domain}/`
 2. **Create metadata JSON**: `{domain}_pipeline.json` with sources, targets, schema
@@ -606,7 +724,7 @@ databricks bundle run {job_name}
 5. **Create job YAML**: `{domain}_job.yml`
 6. **Update databricks.yml**: Add include pattern
 
-### 10.2 Include Pattern
+### 11.2 Include Pattern
 
 ```yaml
 include:
@@ -615,9 +733,9 @@ include:
 
 ---
 
-## 11. Testing
+## 12. Testing
 
-### 11.1 Test Pipeline
+### 12.1 Test Pipeline
 
 A test pipeline validates the metadata structure:
 
@@ -627,7 +745,65 @@ src/metadata/test/test_pipeline.json
 src/test_pipeline.py
 ```
 
-### 11.2 Unit Tests
+### 12.2 Step-by-Step Test Framework
+
+For complex pipelines (especially with dedup), use the step-by-step test job pattern:
+
+```yaml
+# {domain}_test_job.yml
+resources:
+  jobs:
+    {domain}_test_job:
+      tasks:
+        - task_key: step1_create_tables
+          notebook_task:
+            notebook_path: data_setup/06_create_claims_tables.py
+        - task_key: step2_load_test_data
+          notebook_task:
+            notebook_path: data_setup/07_load_claims_data.py
+          depends_on:
+            - task_key: step1_create_tables
+        - task_key: step3_test_metadata
+          notebook_task:
+            notebook_path: test_notebooks/test_claims_metadata.py
+          depends_on:
+            - task_key: step2_load_test_data
+        - task_key: step4_test_mapper
+          notebook_task:
+            notebook_path: test_notebooks/test_claims_mapper.py
+          depends_on:
+            - task_key: step3_test_metadata
+        - task_key: step5_test_transformations
+          notebook_task:
+            notebook_path: test_notebooks/test_claims_transformations.py
+          depends_on:
+            - task_key: step4_test_mapper
+        - task_key: step6_test_dedup
+          notebook_task:
+            notebook_path: test_notebooks/test_claims_dedup.py
+          depends_on:
+            - task_key: step5_test_transformations
+        - task_key: step7_run_pipeline
+          pipeline_task:
+            pipeline_id: ${resources.pipelines.{domain}_pipeline.id}
+          depends_on:
+            - task_key: step6_test_dedup
+```
+
+### 12.3 Running Individual Test Steps
+
+```bash
+# Run a specific test step
+databricks bundle run {domain}_test_job --only step3_test_metadata
+
+# Run from a specific step onwards
+databricks bundle run {domain}_test_job --only step5_test_transformations
+
+# Run full test job
+databricks bundle run {domain}_test_job
+```
+
+### 12.4 Unit Tests
 
 ```
 tests/
@@ -638,7 +814,7 @@ tests/
 
 ---
 
-## 12. Best Practices
+## 13. Best Practices
 
 1. **Naming Conventions**
    - Folder pattern: `{processing_type}/{layer}/{domain}/`

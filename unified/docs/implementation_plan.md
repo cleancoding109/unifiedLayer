@@ -68,6 +68,19 @@ to merge multiple source paths into unified streaming tables with automatic hist
 | Updated views.py for sequential mapping → transforms | ✅ |
 | All pipelines verified working | ✅ |
 
+### Phase 7: Deduplication & Out-of-Order Handling ✅ COMPLETE
+
+| Task | Status |
+|------|--------|
+| Created dedup.py with watermark-based deduplication | ✅ |
+| Added apply_dedup() for full dedup pipeline | ✅ |
+| Added apply_watermark_only() for watermark without dedup | ✅ |
+| Added validate_dedup_config() for configuration validation | ✅ |
+| Added get_dedup_stats() for testing/debugging | ✅ |
+| Created claims_cdc test pipeline with dedup enabled | ✅ |
+| Created step-by-step test job framework | ✅ |
+| All test steps (1-6) verified passing | ✅ |
+
 ---
 
 ## Current Pipelines
@@ -99,6 +112,16 @@ to merge multiple source paths into unified streaming tables with automatic hist
 | **Pattern** | Many-to-Many (multiple targets from shared sources) |
 | **Status** | ✅ Running |
 
+### claims_cdc_pipeline (Dedup Test Pipeline)
+
+| Property | Value |
+|----------|-------|
+| **Sources** | legacy_claims (no dedup), kafka_claims (with dedup) |
+| **Target** | unified_claims_scd2 |
+| **Pattern** | Many-to-One with selective deduplication |
+| **Features** | Watermark, offset dedup, logical dedup |
+| **Status** | ✅ Running |
+
 ---
 
 ## File Structure
@@ -115,16 +138,26 @@ unified/
 │   ├── metadata/
 │   │   └── stream/unified/{domain}/
 │   │       └── {domain}_pipeline.json   # Per-domain metadata
+│   ├── data_setup/                      # Test data setup notebooks
+│   │   ├── 06_create_claims_tables.py
+│   │   └── 07_load_claims_data.py
+│   ├── test_notebooks/                  # Step-by-step test notebooks
+│   │   ├── test_claims_metadata.py
+│   │   ├── test_claims_mapper.py
+│   │   ├── test_claims_transformations.py
+│   │   └── test_claims_dedup.py
 │   ├── mapper.py                        # Column mapping (rename, defaults)
 │   ├── metadata_loader.py               # Metadata loading & accessor functions
 │   ├── transformations.py               # Type conversions (registry pattern)
+│   ├── dedup.py                         # Watermark-based deduplication
 │   ├── views.py                         # Dynamic view generation
 │   ├── pipeline.py                      # Main orchestration (multi-target)
 │   └── test_pipeline.py                 # Test pipeline notebook
 ├── resources/
 │   └── stream/unified/{domain}/
 │       ├── {domain}_pipeline.yml        # Pipeline resource
-│       └── {domain}_job.yml             # Job resource
+│       ├── {domain}_job.yml             # Job resource
+│       └── {domain}_test_job.yml        # Step-by-step test job (optional)
 └── tests/
     ├── conftest.py
     └── main_test.py
@@ -140,6 +173,9 @@ mapper.apply_mapping()      # Rename columns, apply defaults
      │
      ▼
 transformations.apply_transforms()   # Type conversions
+     │
+     ▼
+dedup.apply_dedup()         # Watermark + offset + logical dedup (optional)
      │
      ▼
 Lakeflow View → CDC Flow → Target
@@ -200,6 +236,67 @@ get_enabled_source_mappings(target_index=0)    # Only enabled mappings
 get_column_mapping(source_name, target_index=0) # Column mapping
 get_full_source_config(source_name, target_index=0) # Merged config
 ```
+
+---
+
+## Dedup Configuration
+
+### Dedup Config Structure (in source_mappings)
+
+```json
+"dedup_config": {
+  "enabled": true,
+  "watermark_column": "event_timestamp",
+  "watermark_delay": "30 minutes",
+  "offset_dedup": {
+    "enabled": true,
+    "columns": ["kafka_partition", "kafka_offset"]
+  },
+  "logical_dedup": {
+    "enabled": true,
+    "columns": ["claim_id", "source_system"]
+  }
+}
+```
+
+### When to Enable Dedup
+
+| Source Type | Enable Dedup? | Reason |
+|-------------|---------------|--------|
+| Kafka/Streaming | ✅ Yes | Out-of-order, at-least-once delivery |
+| Legacy/Batch | ❌ No | Already deduplicated |
+| CDC with dedup | ❌ No | Connector handles dedup |
+
+---
+
+## Step-by-Step Testing
+
+### Test Job Structure
+
+Create a test job that runs each module independently:
+
+```bash
+# Run individual steps
+databricks bundle run claims_cdc_test_job --only step1_create_tables
+databricks bundle run claims_cdc_test_job --only step2_load_test_data
+databricks bundle run claims_cdc_test_job --only step3_test_metadata
+databricks bundle run claims_cdc_test_job --only step4_test_mapper
+databricks bundle run claims_cdc_test_job --only step5_test_transformations
+databricks bundle run claims_cdc_test_job --only step6_test_dedup
+databricks bundle run claims_cdc_test_job --only step7_run_pipeline
+
+# Run full test job
+databricks bundle run claims_cdc_test_job
+```
+
+### Test Notebooks
+
+| Notebook | Tests |
+|----------|-------|
+| `test_claims_metadata.py` | JSON loading, structure validation, accessor functions |
+| `test_claims_mapper.py` | apply_mapping(), column renaming, defaults |
+| `test_claims_transformations.py` | apply_transforms(), type conversions |
+| `test_claims_dedup.py` | apply_dedup(), watermark, offset/logical dedup |
 
 ---
 
@@ -325,6 +422,8 @@ targets:
 | Mapper/Transforms refactoring | ✅ DONE | Sequential apply_mapping → apply_transforms |
 | Epoch to timestamp | ✅ DONE | Convert epoch ms/s to TIMESTAMP |
 | Transform registry | ✅ DONE | Extensible pattern for adding new transforms |
+| Deduplication module | ✅ DONE | Watermark-based dedup for Kafka sources |
+| Step-by-step test job | ✅ DONE | Module-by-module testing framework |
 
 ## Next Steps (Future Enhancements)
 

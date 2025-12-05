@@ -7,12 +7,12 @@ resources:
       tasks:
         - task_key: create_tables
           notebook_task:
-            notebook_path: ../../src/data_setup/01_create_customer_tables.py
+            notebook_path: ../../data_setup/01_create_customer_tables.py
             source: WORKSPACE
 
         - task_key: load_data
           depends_on:
             - task_key: create_tables
           notebook_task:
-            notebook_path: ../../src/data_setup/02_load_customer_data.py
+            notebook_path: ../../data_setup/02_load_customer_data.py
             source: WORKSPACE
